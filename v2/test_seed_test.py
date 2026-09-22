@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from seed_test import calibrated_threshold, parse_ca, run
+from seed_test import (bootstrap_tau_ci, calibrated_threshold, parse_ca, run)
 
 
 class SeedTestChecks(unittest.TestCase):
@@ -19,6 +19,11 @@ class SeedTestChecks(unittest.TestCase):
         iid_only, _ = calibrated_threshold(1.0, 20, 20, T=80_000)
         self.assertGreater(many, 0.75 * one)
         self.assertGreater(many, 3 * iid_only)
+        shared, _ = calibrated_threshold(1.0, 20, 20, T=80_000,
+                                         sigma_syst=2.0,
+                                         wt_forms=["A"] * 20,
+                                         mut_forms=["A"] * 20)
+        self.assertLess(shared, many / 2)
         self.assertTrue(np.isnan(calibrated_threshold(1.0, 5, 2,
                                                     sigma_syst=float("nan"))[0]))
 
@@ -65,6 +70,27 @@ class SeedTestChecks(unittest.TestCase):
             self.assertIn("0 rejected", output.getvalue())
             self.assertIn("INCONCLUSIVE", output.getvalue())
             self.assertEqual(result["v2_hybrid"]["n"], 1)
+
+    def test_multi_protein_manifest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = os.path.join(directory, "variants.csv")
+            with open(manifest, "w", newline="") as out:
+                writer = csv.writer(out)
+                writer.writerow(("pdb_id", "chain", "variant", "resnum",
+                                 "wt_aa", "mut_aa", "crystal_form", "protein_id"))
+                writer.writerow(("a", "A", "WT", "", "", "", "P1", "A"))
+                writer.writerow(("b", "A", "WT", "", "", "", "P1", "B"))
+            with self.assertRaisesRegex(SystemExit, "single-protein only"):
+                run(directory, manifest)
+
+    def test_tau_ci_requires_independent_clusters(self):
+        low, high = bootstrap_tau_ci([3, 4, 5], [1, 1, 1], [1, 1, 1],
+                                      ["site-a", "site-b", "site-c"],
+                                      n_boot=100)
+        self.assertLessEqual(low, high)
+        self.assertTrue(np.isnan(bootstrap_tau_ci([3, 4], [1, 1], [1, 1],
+                                                   ["same", "same"],
+                                                   n_boot=100)[0]))
 
 
 if __name__ == "__main__":

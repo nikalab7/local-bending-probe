@@ -88,6 +88,10 @@ consequences, and conflating them is what produced the retracted claim:
 The hybrid is phase-consistent, so it is still the better metric — 0.695 vs 0.600
 at τ=5° — but that is a quantitative improvement, not a qualitative rescue.
 
+The mean|per-phase| value above is a descriptive summary. Stage 6 keeps the
+full phase-slope distribution when it simulates noisy labels; replacing it with
+one mean slope would misprice the thresholded AUC.
+
 ### 2. A straight axis must read zero — only the bisector family does
 
 Worst |metric| on a perfectly **straight** axis (target 0):
@@ -164,6 +168,9 @@ twist change:
 Put the two sensitivities side by side (using the **corrected** bend slopes —
 mean|per-phase|, per §1 and `CORRECTIONS.md`):
 
+The table uses mean|per-phase| as a descriptive sensitivity. Stage 6 uses the
+individual phase slopes instead, because thresholding a noisy delta is nonlinear.
+
 | conformation | d/d(axis bend) | d/d(twist) | **twist : bend** |
 |---|---|---|---|
 | α-helix | 0.316 | 1.026 | **3.2 ×** |
@@ -210,17 +217,19 @@ The correct multiplier depends on the aggregation and is not 2:
 
 ### 6. Verdict and its sensitivity
 
-At σ_xyz = 0.20 Å, 5 WT / 2 mutant crystals, 5% null FPR — `tau*` for oracle
-AUC 0.75, as Cα displacement:
+At σ_xyz = 0.20 Å, 5 WT / 2 mutant crystals, 5% null FPR — the coverage-aware
+stage-6 simulation gives `tau*` for oracle AUC 0.75, as Cα displacement:
 
 | candidate | β-strand | α-helix | 3₁₀ | PPII |
 |---|---|---|---|---|
-| **`hybrid`** | **0.15 Å** | **0.16 Å** | 0.19 Å | 0.29 Å |
-| `bisector` | abstains | 0.18 Å | 0.19 Å | 0.29 Å |
+| **`hybrid`** | **abstains** | **0.17 Å** | 0.20 Å | 0.30 Å |
+| `bisector` | abstains | 0.19 Å | 0.20 Å | 0.30 Å |
 | `smooth_chord` | 0.18 Å | 0.40 Å | 0.42 Å | 0.24 Å |
 | `v1_pca5` | 0.18 Å | **3.66 Å** | **2.14 Å** | 0.93 Å |
 
-All within the plausible 0.1–0.5 Å band for the hybrid → **LABEL USABLE.**
+The admissible hybrid branches are within the plausible 0.1–0.5 Å band. The
+β-strand row is an abstention, so coverage is part of the result rather than a
+hidden finite-only filter.
 
 (These are Monte-Carlo estimates and move by ±0.01–0.02 Å run to run — quoted to
 two decimals for comparability, not because the third would be meaningful. The
@@ -300,18 +309,25 @@ Known residuals, not swept under the rug:
 
 ## Seed-test implementation status
 
-`seed_test.py` now keeps the estimated crystal-form systematic offset in the
-null threshold and simulated AUC; it does not average that offset away as the
-number of crystals grows. It checks the mutation identity and the full 9-residue
+`seed_test.py` keeps the estimated crystal-form systematic offset in the null
+threshold and simulated AUC; it does not average that offset away as the number
+of crystals grows. Thresholds use the actual WT/mutant form labels and counts,
+so a shared form is correlated across the pair instead of being treated as two
+independent offsets. It checks the mutation identity and the full 9-residue
 local sequence against the WT reference before scoring a structure. It accepts
 fixed-column `.pdb` and `.ent` files; mmCIF is not parsed.
 
-The current estimator still uses median WT/mutant crystal counts and an ideal-
-geometry response slope. Its automatic verdict is **inconclusive** when fewer
-than 20 variants are scored, crystal counts vary by pair, or the iid/systematic
-split cannot be estimated. A high AUC in the remaining case still needs manual
-review of the real-coordinate Jacobian, crystal-form matching, and uncertainty
-before a benchmark build is justified. No real seed set has been run here.
+The estimator measures a real-coordinate Jacobian for every usable WT site and
+uses that slope distribution in tau deconvolution and the oracle ceiling. It
+reports metric coverage, branch counts, and cross-branch pair rejections, and
+uses a site-cluster bootstrap for the tau confidence interval. The harness is
+explicitly single-protein; manifests containing multiple `protein_id` values
+are rejected until a protein/site hierarchy is implemented.
+
+The automatic verdict is **inconclusive** when fewer than 20 variants are
+scored, crystal counts vary by pair, a positive cluster-bootstrap tau lower
+bound is absent, or the iid/systematic split cannot be estimated. No real seed
+set has been run here.
 
 ## Next
 

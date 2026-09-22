@@ -54,7 +54,8 @@ The hybrid's numbers are unaffected, because the hybrid's response *is* phase
 consistent (+0.86 to +1.12 across all phases), so nothing cancelled.
 
 Fixed in code: `phase_slopes()` now returns the per-phase slopes, both means, and
-a `sign_consistent` flag; stage 2 prints all of them; stage 6 uses mean|per-phase|.
+a `sign_consistent` flag; stage 2 prints all of them; stage 6 carries the
+per-phase slope mixture into its thresholded simulation.
 
 ### What replaces it — a real finding, narrower
 
@@ -196,3 +197,39 @@ This environment has no access to any structure database (`files.rcsb.org`,
 `www.ebi.ac.uk`, `files.wwpdb.org`, `data.pdbj.org` all unreachable) and no cached
 coordinates, so the seed test cannot be run here. `perturbation.py` is validated
 against ideal geometry and ready to point at real windows.
+
+---
+
+## C5 — Seed-test and gate implementation corrections
+
+The follow-up audit identified several implementation gaps in the first v2
+rebuild. They are now explicit in code and output:
+
+1. **Finite-only selection bias:** stage 3 and stage 6 report bend coverage,
+   straight-axis coverage, and branch abstentions. Stage 6 evaluates AUC only on
+   trials where both noisy labels are finite, instead of silently selecting
+   finite values and calling that the full population.
+2. **Response slope:** the seed test no longer assumes an ideal slope of 1.0.
+   It measures the local Jacobian on the actual WT coordinates, fits against the
+   actual half-window axis-angle change, and carries the finite slope
+   distribution into tau deconvolution and the ceiling simulation.
+3. **Crystal-form covariance:** the null model gives one form offset to every
+   observation in that form. A WT/mutant pair sharing a form therefore shares
+   that offset; it is not modelled as two independent variant offsets.
+   Thresholds are calibrated per pair from the observed form labels and counts.
+4. **Protein scope and uncertainty:** the current harness is deliberately
+   single-protein and rejects mixed-`protein_id` manifests. Tau uncertainty is
+   a cluster bootstrap over independent residue groups, not a row bootstrap.
+   Cross-branch WT/mutant pairs are rejected and branch/coverage counts are
+   reported.
+5. **Geometry and phase mixture:** perturbation response is normalised by the
+   measured physical axis change, not the commanded bend on an irregular window.
+   Stage 6 samples the per-phase slope mixture directly; it does not replace it
+   with mean absolute slope before thresholding.
+6. **B-factor wording:** the gate now labels 10--30 A^2 as a positional-spread
+   range (0.356--0.616 A) and states that sigma_ref=0.20 A is an explicit
+   sensitivity assumption, equivalent to B=3.16 A^2.
+
+These changes repair estimator and reporting bias. They do not create real
+structure data: the seed-test verdict remains inconclusive until a curated
+multi-form seed is supplied.
