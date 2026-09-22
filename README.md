@@ -29,9 +29,10 @@
 >
 > Nothing has been deleted — the research trail is deliberately preserved, including
 > the errors, mine as well as v1's. The v2 rebuild is on branch
-> `v2-benchmark-rebuild`. The measurement gate **passed on ideal geometry**, which
-> establishes the replacement metric is sound; whether the *label* is usable on real
-> PDB data is **not yet established** and needs an empirical seed test.
+> `v2-benchmark-rebuild`. The replacement metric passed the tested ideal
+> conformations, but a finer twist sweep found a discontinuous handover. It now
+> abstains in that region ([`v2/CORRECTIONS.md`](v2/CORRECTIONS.md) C4).
+> Whether its label and coverage are usable on real PDB data remains untested.
 >
 > Everything below this banner is the original v1 write-up, unedited.
 

@@ -1,8 +1,8 @@
 # Corrections to the v2 measurement gate
 
-Three claims made in the first version of `v2/README.md` and in commit `85844c2`
-were overstated or wrong. Two were my own analysis errors; one was an unstated
-assumption. They are recorded here rather than edited out of history, because the
+Several claims made in earlier versions of `v2/README.md` were overstated or
+wrong. The first three corrections cover commit `85844c2`; two were analysis
+errors and one was an unstated assumption. They are recorded here rather than edited out of history, because the
 whole point of this project's structure is that the trail stays visible.
 
 Prompted by review feedback that the gate was drawing a strong conclusion from
@@ -139,20 +139,40 @@ question that changes what the right metric is.
 
 ---
 
+## C4 — WITHDRAWN: "no coverage gap" and "smooth handover"
+
+The original twist sweep used 10° steps. It missed the branch boundary near
+171.4° twist. On an ideal, perfectly straight axis, `HybridAxisBend` changes
+from the bisector value 0° to the smoothed value about 3.45° across a 0.05°
+twist step. This is a discontinuity in the reported bend, not real curvature.
+The previous claim of a smooth handover and zero twist coupling everywhere was
+wrong.
+
+The metric now abstains when the minimum sine between consecutive bisectors is
+between 0.035 and 0.15. On the tested straight-axis sweep this covers
+171.40–177.95° and 182.05–188.60° twist. The upper boundary protects the
+unstable bisector; the lower boundary restricts the smoothed branch to
+near-180° extended geometry, where its straight-axis offset is small. This
+makes the coverage gap explicit. Neither the fraction of real windows lost nor
+the calibration near those boundaries has been measured on PDB coordinates.
+
+The ideal α/π/3₁₀/PPII and exact 180° β measurements remain applicable on their
+tested domains. Stage 4 now reports the fine-sweep abstention band.
+
 ## What still stands
 
-Unaffected by all three corrections, because each is a direct measurement with no
+Unaffected by the corrections on their stated domains, because each is a direct measurement with no
 averaging step and no ideal-vs-real extrapolation in it:
 
 1. **v1's metric has large SS-dependent offsets on a straight axis** — 110.4°
    (α), 132.4° (π), 66.8° (3₁₀), 33.7° (PPII), 0.0° (β). It is an SS classifier.
 2. **v1's metric couples twist to apparent bend** at 1.026 °/° in α-helices; the
-   hybrid at 0.000. (The *ratio* to bend sensitivity was quoted as 79× using the
+   hybrid at 0.000 on the tested α-helix domain. (The *ratio* to bend sensitivity was quoted as 79× using the
    cancelled slope; with the corrected 0.316 it is **3.2×** — still the dominant
    systematic, but not the number I published.)
-3. **The bisector construction is exact** — 0.000 on a straight axis for every
-   helical twist, R² = 1.0000 against ground truth, calibration constant stable
-   to 1% across α/π/3₁₀/PPII, no coverage gap over twists 60–185°.
+3. **The bisector construction is exact where admissible** — 0.000 on a straight
+   ideal helical axis, with a calibration constant stable to 1% across
+   α/π/3₁₀/PPII. The hybrid now abstains in the handover band (C4).
 4. **`smooth_pca ≈ smooth_chord` throughout** — smoothing was the missing
    ingredient, the PCA step was incidental.
 5. **The algebraic circle fit is rejected** — residual wobble dominates it
@@ -169,7 +189,8 @@ WT and mutant crystals; for **both** v1 and v2 metrics measure within-variant
 repeatability (separating iid from systematic where crystal form allows), the
 observed WT→mutant Δ distribution, τ, the null mover FPR, and the resulting
 ceiling. Plus the real-coordinate Jacobian via `perturbation.jacobian`, to test
-whether the ideal-geometry slopes transfer at all.
+whether the ideal-geometry slopes transfer at all. Report how often either WT or
+mutant falls in the hybrid's abstention band.
 
 This environment has no access to any structure database (`files.rcsb.org`,
 `www.ebi.ac.uk`, `files.wwpdb.org`, `data.pdbj.org` all unreachable) and no cached

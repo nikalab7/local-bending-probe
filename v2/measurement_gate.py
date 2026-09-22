@@ -239,8 +239,8 @@ def stage4():
             cells.append(f"{max(vs):>10.3f}")
         print(f"  {c.name:>20} " + " ".join(cells))
 
-    print("\n  (b) Continuous twist sweep -- is there a COVERAGE GAP where neither")
-    print("      branch of the hybrid is admissible? Straight axis, so target is 0.\n")
+    print("\n  (b) Twist sweep -- expose the handover band where neither branch")
+    print("      is reliable. Straight axis, so target is 0.\n")
     bis, sm, hyb = BisectorAxis(9), SmoothedChord(9, 4), HybridAxisBend(9)
     print(f"  {'twist':>6} {'min|sin|':>9} {'branch':>10} {'bisector':>10} "
           f"{'smooth_w4':>10} {'HYBRID':>10}")
@@ -253,12 +253,31 @@ def stage4():
         print(f"  {turn:>6} {bis.degeneracy(P):>9.4f} {hyb.branch(P):>10} "
               f"{('       nan' if bv != bv else f'{bv:10.3f}')} {sm(P):>10.3f} "
               f"{hv:>10.3f}")
-        if abs(hv) > STRAIGHT_TOL:
+        if not np.isfinite(hv) or abs(hv) > STRAIGHT_TOL:
             gaps.append((turn, round(hv, 2)))
-    print(f"\n  twists where the hybrid breaks the {STRAIGHT_TOL:.0f} deg tolerance: "
-          f"{gaps if gaps else 'none -- no coverage gap'}")
-    print("  The switch at twist ~172 deg is where bisectors go antiparallel. Both")
-    print("  branches are exact on their own side of it, so the handover is smooth.")
+    dense_gaps = []
+    for turn in np.arange(165.0, 195.01, 0.05):
+        rise = float(np.clip(1.5 + (turn - 100) / 80.0 * 1.8, 1.1, 3.4))
+        r = np.sqrt(max(3.8 ** 2 - rise ** 2, 1e-6)) / (
+            2 * np.sin(np.radians(turn) / 2))
+        P = helix_on_arc(9, r, rise, turn, 0.0)
+        if hyb.branch(P) == "abstain":
+            dense_gaps.append(turn)
+    print(f"\n  coarse-grid inadmissible twists: {gaps}")
+    if dense_gaps:
+        intervals = []
+        start = previous = dense_gaps[0]
+        for turn in dense_gaps[1:]:
+            if turn - previous > 0.051:
+                intervals.append((start, previous))
+                start = turn
+            previous = turn
+        intervals.append((start, previous))
+        print("  dense-grid abstention bands: " + ", ".join(
+            f"{lo:.2f} to {hi:.2f} deg" for lo, hi in intervals))
+    print("  A direct switch at ~171.4 deg created a 3.45 deg jump on a perfectly")
+    print("  straight axis. The hybrid now abstains in the handover band; report")
+    print("  its empirical coverage cost on real structures.")
 
     print("\n  (c) DIFFERENTIAL BIAS -- the part of criterion-1 bias that does NOT")
     print("      cancel in a WT->mutant difference.\n")

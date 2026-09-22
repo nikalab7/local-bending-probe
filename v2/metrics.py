@@ -347,9 +347,9 @@ class HybridAxisBend:
       * bisectors well separated (helical twist)  -> BisectorAxis / CAL_BISECTOR
       * bisectors (anti)parallel (extended twist) -> SmoothedChord(w=4) / CAL_...
 
-    Each branch is exact on its own domain (straight axis reads 0.000, R^2 = 1.0000
-    against ground truth), and dividing by the branch calibration puts both on one
-    common scale, so the value means the same thing either side of the switch.
+    The smoothed branch has a nonzero straight-axis offset away from an exact
+    180-degree strand. Switching directly at the bisector degeneracy threshold
+    creates a discontinuity, so the uncertain handover band abstains.
 
     `branch(ca)` reports which estimator fired, which belongs in the v2 output
     schema as a QC field.
@@ -357,21 +357,32 @@ class HybridAxisBend:
     is_axis_metric = True
     smooth = 4
 
-    def __init__(self, span=9, min_sin=0.15):
+    def __init__(self, span=9, min_sin=0.15, smooth_max_sin=0.035):
+        if not 0 <= smooth_max_sin < min_sin:
+            raise ValueError("need 0 <= smooth_max_sin < min_sin")
         self.span, self.min_sin = span, min_sin
+        self.smooth_max_sin = smooth_max_sin
         self.name = f"hybrid_s{span}"
         self._bis = BisectorAxis(span=span, min_sin=min_sin)
         self._sm = SmoothedChord(span=span, smooth=4)
 
     def branch(self, ca):
-        return "bisector" if self._bis.degeneracy(ca) >= self.min_sin else "smoothed"
+        degeneracy = self._bis.degeneracy(ca)
+        if degeneracy >= self.min_sin:
+            return "bisector"
+        if degeneracy <= self.smooth_max_sin:
+            return "smoothed"
+        return "abstain"
 
     def __call__(self, ca):
         P = np.asarray(ca, float)
-        if self._bis.degeneracy(P) >= self.min_sin:
+        branch = self.branch(P)
+        if branch == "bisector":
             v = self._bis(P)
             return float("nan") if v != v else v / CAL_BISECTOR
-        return self._sm(P) / CAL_SMOOTH_W4_EXTENDED
+        if branch == "smoothed":
+            return self._sm(P) / CAL_SMOOTH_W4_EXTENDED
+        return float("nan")
 
     def conditioning(self, ca):
         return 0.0

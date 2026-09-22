@@ -1,9 +1,9 @@
 # v2 — Measurement Gate
 
-**Status: gate PASSED on ideal geometry. The replacement metric is sound.
-Whether the LABEL is usable on real PDB data is NOT yet established — that needs
-the empirical seed test.** See [`CORRECTIONS.md`](CORRECTIONS.md) for three claims
-from the first version of this file that were withdrawn, two of them my own errors.
+**Status: gate passed on the tested ideal conformations outside a newly identified
+twist handover band, where the metric now abstains. Whether the LABEL and its
+coverage are usable on real PDB data is NOT yet established — that needs the
+empirical seed test.** See [`CORRECTIONS.md`](CORRECTIONS.md) for withdrawn claims.
 
 This directory is step 2 of the v2 rebuild: settle the *measurement* before any
 model is trained again. No ML, no PDB downloads, no dataset — just geometry,
@@ -132,11 +132,17 @@ itself exact.
 annotation, so it is not circular) and divides by a per-branch calibration, so both
 sides report the same quantity: **true full-span axis bend in degrees**.
 
+**Handover correction:** the original direct switch was not smooth. A fine twist
+sweep found a 3.45° jump on a perfectly straight axis at about 171.4° twist.
+The metric now abstains between the admissible bisector and near-180° smoothed
+domains; the coverage cost on real structures has not been measured. See
+[`CORRECTIONS.md`](CORRECTIONS.md) C4.
+
 * bisector calibration is essentially universal over helical twists —
   0.6248 / 0.6256 / 0.6307 / 0.6310 for α / π / 3₁₀ / PPII, all **R² = 1.0000**
 * hybrid slope vs ground truth: 0.995 (α), 1.004 (3₁₀), 1.005 (PPII), 1.250 (β)
-* continuous twist sweep 60°–185°: **no coverage gap**, straight axis reads 0.000
-  throughout (worst 1.8° in the handover zone at 175°)
+* the earlier 10° twist sweep missed a narrow handover failure; the corrected
+  metric reports `NaN` in that region instead of a misleading bend
 
 ### 4. The real decision axis is differential bias, not noise
 
@@ -257,9 +263,9 @@ residues (`AUDIT.md` F3) instead of averaging it down into the label.
 
 ## What this does and does not establish
 
-**Does.** The replacement metric construction is sound: exact on a straight axis
-for every regular conformation, phase-consistent, linear against ground truth, and
-free of the twist coupling. And v1's metric has two demonstrable defects — large
+**Does.** On the ideal conformations tested outside the handover region, the
+replacement metric reads zero on a straight axis, is phase-consistent and tracks
+controlled bend. And v1's metric has two demonstrable defects — large
 SS-dependent offsets, and a phase-dependent sign that scrambles signed analyses
 (which is a candidate explanation for its Spearman 0.077). Neither is a fact about
 protein sequence.
@@ -289,7 +295,23 @@ Known residuals, not swept under the rug:
   true 60°); fine for the 1–10° regime being chased, not for large bends
 * 9-residue span costs coverage vs v1's 5, and is less "local" — both need
   reporting as benchmark coverage
-* 1.8° straight-axis residual in the twist handover zone near 175°
+* the corrected hybrid abstains near the twist handover; real-data coverage is
+  unmeasured
+
+## Seed-test implementation status
+
+`seed_test.py` now keeps the estimated crystal-form systematic offset in the
+null threshold and simulated AUC; it does not average that offset away as the
+number of crystals grows. It checks the mutation identity and the full 9-residue
+local sequence against the WT reference before scoring a structure. It accepts
+fixed-column `.pdb` and `.ent` files; mmCIF is not parsed.
+
+The current estimator still uses median WT/mutant crystal counts and an ideal-
+geometry response slope. Its automatic verdict is **inconclusive** when fewer
+than 20 variants are scored, crystal counts vary by pair, or the iid/systematic
+split cannot be estimated. A high AUC in the remaining case still needs manual
+review of the real-coordinate Jacobian, crystal-form matching, and uncertainty
+before a benchmark build is justified. No real seed set has been run here.
 
 ## Next
 
