@@ -50,9 +50,9 @@ entity/chain mapping matters more than automation at n=20-50):
   * `WT` is the reference variant.
   * `resnum/wt_aa/mut_aa` describe the single substitution (blank for WT).
   * `crystal_form` is any grouping you trust to carry systematic effects
-    (space group, crystal form, deposition batch). Needed for the variance
-    decomposition; if absent, only pooled noise is reported and the systematic
-    component is flagged unestimated.
+    (space group, crystal form, deposition batch). Replicates within at least
+    one form and at least two forms at a site are needed to estimate both
+    components. Otherwise the verdict is inconclusive.
 """
 from __future__ import annotations
 
@@ -60,11 +60,11 @@ import argparse
 import csv
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 
-from metrics import HybridAxisBend, LegacyPCA5, sigma_from_bfactor
+from metrics import HybridAxisBend, LegacyPCA5
 from perturbation import jacobian
 
 TARGET_FPR = 0.05
@@ -79,13 +79,15 @@ THREE2ONE = {
 # parsing
 # --------------------------------------------------------------------------- #
 def parse_ca(path, want_chain=None):
-    """{resnum: (aa, xyz, bfactor)} for model 1, highest-occupancy altloc.
+    """Parse fixed-column PDB/ENT into {resnum: (aa, xyz, bfactor)}.
 
     Differs from v1's parser in two ways that matter here: it keeps the B-factor
-    (needed for a per-structure uncertainty estimate) and it RECORDS rather than
-    silently drops insertion codes, because a dropped insertion code shifts
-    residue registration and would corrupt a matched pair.
+    (needed for a per-structure uncertainty estimate) and counts skipped
+    insertion codes. Windows touching an insertion code must be checked by
+    sequence registration before analysis.
     """
+    if path.lower().endswith(".cif"):
+        raise ValueError("mmCIF parsing is not implemented; provide .pdb or .ent files")
     best, ins = {}, 0
     with open(path) as fh:
         for line in fh:
@@ -134,6 +136,12 @@ def window_bfactors(res, centre, span):
     bs = [res[i][2] for i in idx if i in res]
     bs = [b for b in bs if np.isfinite(b)]
     return float(np.mean(bs)) if bs else float("nan")
+
+
+def window_sequence(res, centre, span):
+    half = span // 2
+    idx = range(centre - half, centre + span - half)
+    return tuple(res[i][0] for i in idx) if all(i in res for i in idx) else None
 
 
 # --------------------------------------------------------------------------- #
@@ -186,28 +194,37 @@ def deconvolve_tau(deltas, sigma_delta, slope=1.0):
     return float(np.sqrt(max(excess, 0.0)) / slope)
 
 
-def calibrated_threshold(sigma_m, n_wt, n_mut, fpr=TARGET_FPR, T=200_000, rng=None):
-    """|delta| cut giving `fpr` under the null, for this exact aggregation."""
+def _null_deltas(sigma_iid, n_wt, n_mut, T, rng, sigma_syst=0.0):
+    """Independent crystal noise plus one persistent offset per variant."""
+    wt = np.median(rng.normal(0, sigma_iid, (T, max(n_wt, 1))), axis=1)
+    mut = np.median(rng.normal(0, sigma_iid, (T, max(n_mut, 1))), axis=1)
+    if sigma_syst:
+        wt += rng.normal(0, sigma_syst, T)
+        mut += rng.normal(0, sigma_syst, T)
+    return mut - wt
+
+
+def calibrated_threshold(sigma_m, n_wt, n_mut, fpr=TARGET_FPR, T=200_000,
+                         rng=None, sigma_syst=0.0):
+    """|delta| cut giving `fpr`; systematic offsets survive aggregation."""
     rng = rng or np.random.default_rng(0)
-    if not np.isfinite(sigma_m):
+    if not np.isfinite(sigma_m) or not np.isfinite(sigma_syst):
         return float("nan"), float("nan")
-    wt = np.median(rng.normal(0, sigma_m, (T, max(n_wt, 1))), axis=1)
-    mut = np.median(rng.normal(0, sigma_m, (T, max(n_mut, 1))), axis=1)
-    d = np.abs(mut - wt)
-    return float(np.quantile(d, 1 - fpr)), float(np.sqrt(np.mean((mut - wt) ** 2)))
+    d = _null_deltas(sigma_m, n_wt, n_mut, T, rng, sigma_syst)
+    return float(np.quantile(np.abs(d), 1 - fpr)), float(np.sqrt(np.mean(d ** 2)))
 
 
 def oracle_ceiling(tau, slope, sigma_m, n_wt, n_mut, fpr=TARGET_FPR,
-                   T=80_000, rng=None):
+                   T=80_000, rng=None, sigma_syst=0.0):
     """Oracle AUC: labels from noisy aggregated measurement, score = |true|."""
     from sklearn.metrics import roc_auc_score
     rng = rng or np.random.default_rng(7)
-    if not all(np.isfinite([tau, slope, sigma_m])) or slope <= 1e-9 or tau <= 0:
+    if not all(np.isfinite([tau, slope, sigma_m, sigma_syst])) or slope <= 1e-9 or tau <= 0:
         return float("nan")
     t = rng.normal(0, tau, T)
-    agg = (np.median(rng.normal(0, sigma_m, (T, max(n_mut, 1))), axis=1)
-           - np.median(rng.normal(0, sigma_m, (T, max(n_wt, 1))), axis=1))
-    thr, _ = calibrated_threshold(sigma_m, n_wt, n_mut, fpr, T=T, rng=rng)
+    agg = _null_deltas(sigma_m, n_wt, n_mut, T, rng, sigma_syst)
+    thr, _ = calibrated_threshold(sigma_m, n_wt, n_mut, fpr, T=T, rng=rng,
+                                  sigma_syst=sigma_syst)
     mov = np.abs(slope * t + agg) > thr
     if not (0 < mov.sum() < T):
         return float("nan")
@@ -218,7 +235,8 @@ def oracle_ceiling(tau, slope, sigma_m, n_wt, n_mut, fpr=TARGET_FPR,
 # the real-data run
 # --------------------------------------------------------------------------- #
 def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
-    rows = list(csv.DictReader(open(variants_csv)))
+    with open(variants_csv, newline="") as source:
+        rows = list(csv.DictReader(source))
     if not rows:
         sys.exit("variants.csv is empty")
     has_form = any(r.get("crystal_form") for r in rows)
@@ -246,19 +264,84 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
         if key in loaded:
             continue
         path = None
-        for ext in (".pdb", ".ent", ".cif"):
+        for ext in (".pdb", ".ent"):
             cand = os.path.join(pdb_dir, r["pdb_id"] + ext)
             if os.path.exists(cand):
                 path = cand
                 break
         if path is None:
-            print(f"    MISSING {r['pdb_id']} -- skipped")
+            if os.path.exists(os.path.join(pdb_dir, r["pdb_id"] + ".cif")):
+                print(f"    UNSUPPORTED {r['pdb_id']}.cif -- convert to PDB/ENT first")
+            else:
+                print(f"    MISSING {r['pdb_id']} -- skipped")
             continue
         res, ins = parse_ca(path, r["chain"])
         ins_total += ins
         loaded[key] = res
     print(f"  structures loaded: {len(loaded)}   insertion-coded Ca skipped: "
           f"{ins_total}")
+
+    # Screen local registration at the widest metric span. A PDB author's
+    # residue number alone is not proof that two windows refer to the same site;
+    # full entity/SIFTS mapping is still required before a benchmark is built.
+    site_meta = {}
+    for var, vrows in by_variant.items():
+        if var == "WT":
+            continue
+        meta = {(r.get("resnum", "").strip(), r.get("wt_aa", "").strip().upper(),
+                 r.get("mut_aa", "").strip().upper()) for r in vrows}
+        if len(meta) != 1 or not all(next(iter(meta))):
+            sys.exit(f"incomplete or inconsistent mutation metadata for {var}")
+        num, wt_aa, mut_aa = next(iter(meta))
+        if wt_aa == mut_aa:
+            sys.exit(f"variant {var} has identical WT and mutant amino acids")
+        centre = int(num)
+        if centre in site_meta and site_meta[centre] != wt_aa:
+            sys.exit(f"conflicting WT amino acid at residue {centre}")
+        site_meta[centre] = wt_aa
+
+    valid_at = set()
+    rejected = 0
+    for centre, wt_aa in site_meta.items():
+        wt_sequences = []
+        for r in by_variant["WT"]:
+            res = loaded.get((r["pdb_id"], r["chain"]))
+            seq = window_sequence(res, centre, 9) if res else None
+            if seq is not None and seq[4] == wt_aa and window(res, centre, 9) is not None:
+                wt_sequences.append(seq)
+        counts = Counter(wt_sequences)
+        if not counts:
+            rejected += len(by_variant["WT"])
+            continue
+        highest = max(counts.values())
+        modes = [seq for seq, count in counts.items() if count == highest]
+        if len(modes) != 1:
+            print(f"    AMBIGUOUS WT sequence at {centre} -- site skipped")
+            rejected += len(by_variant["WT"])
+            continue
+        reference = modes[0]
+        for r in by_variant["WT"]:
+            res = loaded.get((r["pdb_id"], r["chain"]))
+            seq = window_sequence(res, centre, 9) if res else None
+            if seq == reference and window(res, centre, 9) is not None:
+                valid_at.add((centre, id(r)))
+            else:
+                rejected += 1
+        for var, vrows in by_variant.items():
+            if var == "WT":
+                continue
+            for r in vrows:
+                if int(r["resnum"]) != centre:
+                    continue
+                res = loaded.get((r["pdb_id"], r["chain"]))
+                seq = window_sequence(res, centre, 9) if res else None
+                expected = reference[:4] + (r["mut_aa"].strip().upper(),) + reference[5:]
+                if seq == expected and window(res, centre, 9) is not None:
+                    valid_at.add((centre, id(r)))
+                else:
+                    rejected += 1
+    print(f"  local sequence QC: {len(valid_at)} site/structure matches; "
+          f"{rejected} rejected (9-Ca window, WT/mutant identity and flanks)")
 
     results = {}
     for mname, m in metrics:
@@ -280,6 +363,8 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
             for centre in centres:
                 groups = defaultdict(list)
                 for r in vrows:
+                    if (centre, id(r)) not in valid_at:
+                        continue
                     res = loaded.get((r["pdb_id"], r["chain"]))
                     if not res:
                         continue
@@ -298,8 +383,8 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
                     syst_all.append(s_syst)
         sigma_iid = float(np.median(iid_all)) if iid_all else float("nan")
         sigma_syst = float(np.median(syst_all)) if syst_all else float("nan")
-        sigma_m = float(np.sqrt(np.nansum([sigma_iid ** 2, sigma_syst ** 2]))) \
-            if np.isfinite(sigma_iid) else float("nan")
+        sigma_m = float(np.hypot(sigma_iid, sigma_syst)) \
+            if np.isfinite(sigma_iid) and np.isfinite(sigma_syst) else float("nan")
         print(f"  [1] within-variant repeatability  (n groups: iid {len(iid_all)},"
               f" syst {len(syst_all)})")
         print(f"      sigma_iid        = {sigma_iid:.3f} deg   (shrinks as 1/sqrt(n))")
@@ -307,10 +392,12 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
         print(f"      sigma_total      = {sigma_m:.3f} deg")
 
         # 2. WT -> mutant delta, one variant = one observation
-        wt_ref = {}
+        wt_ref, wt_counts = {}, {}
         for centre in site_nums:
             vals = []
             for r in by_variant["WT"]:
+                if (centre, id(r)) not in valid_at:
+                    continue
                 res = loaded.get((r["pdb_id"], r["chain"]))
                 if not res:
                     continue
@@ -321,7 +408,8 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
                         vals.append(v)
             if vals:
                 wt_ref[centre] = float(np.median(vals))
-        deltas, n_mut_per = [], []
+                wt_counts[centre] = len(vals)
+        deltas, n_wt_per, n_mut_per = [], [], []
         for var, vrows in by_variant.items():
             if var == "WT" or not vrows[0].get("resnum"):
                 continue
@@ -330,6 +418,8 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
                 continue
             vals = []
             for r in vrows:
+                if (centre, id(r)) not in valid_at:
+                    continue
                 res = loaded.get((r["pdb_id"], r["chain"]))
                 if not res:
                     continue
@@ -340,6 +430,7 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
                         vals.append(v)
             if vals:
                 deltas.append(float(np.median(vals)) - wt_ref[centre])
+                n_wt_per.append(wt_counts[centre])
                 n_mut_per.append(len(vals))
         deltas = np.array(deltas, float)
         print(f"\n  [2] WT -> mutant delta   (one biological variant = one obs)")
@@ -348,32 +439,39 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
             continue
         print(f"      variants scored : {len(deltas)}")
         print(f"      median |delta|  : {np.median(np.abs(deltas)):.3f} deg")
-        print(f"      SD of delta     : {deltas.std(ddof=1):.3f} deg")
+        delta_sd = float(deltas.std(ddof=1)) if len(deltas) >= 2 else float("nan")
+        print(f"      SD of delta     : {delta_sd:.3f} deg")
         print(f"      90th pct |delta|: {np.percentile(np.abs(deltas), 90):.3f} deg")
 
         # 3-5
-        n_wt = len(by_variant["WT"])
+        n_wt = int(np.median(n_wt_per)) if n_wt_per else 1
         n_mut = int(np.median(n_mut_per)) if n_mut_per else 1
-        thr, sd_delta = calibrated_threshold(sigma_m, n_wt, n_mut, fpr)
+        thr, sd_delta = calibrated_threshold(sigma_iid, n_wt, n_mut, fpr,
+                                             sigma_syst=sigma_syst)
         slope = 1.0 if mname == "v2_hybrid" else 0.316   # ideal-geometry value
         tau = deconvolve_tau(deltas, sd_delta, slope)
         print(f"\n  [3] tau (true-effect SD, deconvolved)  = {tau:.3f} deg"
               f"   [slope assumed {slope}]")
-        print(f"  [4] calibrated mover threshold ({fpr:.0%} FPR, {n_wt} WT /"
-              f" {n_mut} mut) = {thr:.3f} deg")
+        print(f"  [4] approximate mover threshold ({fpr:.0%} FPR, median counts"
+              f" {n_wt} WT / {n_mut} mut) = {thr:.3f} deg")
         movers = int((np.abs(deltas) > thr).sum())
         print(f"      movers by that cut : {movers}/{len(deltas)} "
               f"({movers/len(deltas):.0%})")
-        ceil = oracle_ceiling(tau, slope, sigma_m, n_wt, n_mut, fpr)
+        ceil = oracle_ceiling(tau, slope, sigma_iid, n_wt, n_mut, fpr,
+                              sigma_syst=sigma_syst)
         print(f"  [5] ORACLE AUC CEILING = {ceil:.3f}")
+        counts_uniform = (len(set(zip(n_wt_per, n_mut_per))) == 1)
         results[mname] = dict(sigma_iid=sigma_iid, sigma_syst=sigma_syst,
                               sigma=sigma_m, n=len(deltas), tau=tau,
-                              ceiling=ceil, movers=movers)
+                              ceiling=ceil, movers=movers,
+                              counts_uniform=counts_uniform)
 
         # 6. real-coordinate Jacobian
         js = []
         for centre in site_nums[:40]:
             for r in by_variant["WT"]:
+                if (centre, id(r)) not in valid_at:
+                    continue
                 res = loaded.get((r["pdb_id"], r["chain"]))
                 if not res:
                     continue
@@ -398,23 +496,31 @@ def run(pdb_dir, variants_csv, fpr=TARGET_FPR):
     print("=" * 78)
     v2 = results.get("v2_hybrid")
     if not v2 or not np.isfinite(v2["ceiling"]):
-        print("  INCONCLUSIVE -- not enough scorable variants. Add more, or relax")
-        print("  the window-completeness requirement, before concluding anything.")
+        print("  INCONCLUSIVE -- too few scorable variants or the iid/systematic")
+        print("  noise split is unestimated. Add matched crystals across forms")
+        print("  before using a GO/NO-GO verdict.")
+        return results
+    if v2["n"] < 20 or not v2["counts_uniform"]:
+        print("  INCONCLUSIVE -- the decision rule needs at least 20 biological")
+        print("  variants and exact pair-specific crystal counts. The numbers")
+        print("  above use median counts when replication varies by pair.")
         return results
     print(f"  v2 sigma_total {v2['sigma']:.2f} deg   tau {v2['tau']:.2f} deg   "
           f"ceiling {v2['ceiling']:.3f}   n={v2['n']} variants")
     if np.isfinite(v2["sigma_syst"]) and v2["sigma_syst"] > v2["sigma_iid"]:
         print("  NOTE systematic > iid: more crystals per variant will NOT help.")
     if v2["ceiling"] >= 0.75 and v2["tau"] > v2["sigma"]:
-        print("\n  GO -- headroom exists. Build the full RCSB/SIFTS miner.")
+        print("\n  PROVISIONAL GO -- simulated headroom exists. Review the")
+        print("  real-coordinate Jacobian and crystal-form matching before")
+        print("  building the full RCSB/SIFTS miner.")
     elif v2["ceiling"] >= 0.65:
-        print("\n  MARGINAL -- some headroom but thin. Widen the seed before")
+        print("\n  PROVISIONAL MARGINAL -- some headroom but thin. Widen the seed before")
         print("  committing to the miner; consider a higher-resolution subset.")
     else:
-        print("\n  NO-GO -- the measurement does not resolve the effect on real")
-        print("  data. Do not build the miner. Change the metric, the target, or")
-        print("  the data class (resolution cut, crystals per variant, or a")
-        print("  different observable altogether).")
+        print("\n  PROVISIONAL NO-GO -- under the assumed response slope and")
+        print("  independent form offsets, the measurement does not resolve")
+        print("  the effect. Review the real-coordinate Jacobian and form")
+        print("  matching before treating this as a final decision.")
     return results
 
 
