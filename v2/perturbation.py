@@ -21,9 +21,9 @@ rigidly about an axis through the midpoint. Properties, all of which matter:
   * every Ca-Ca distance is preserved exactly (each half is rigid, and the
     junction atom lies on the rotation axis), so it is a pure bending
     deformation -- it does not stretch bonds or smuggle in twist within a half;
-  * the two halves' axes turn by exactly `theta` relative to one another, so
-    `theta` is ground truth by construction, with no reference to any idealised
-    model of the starting conformation;
+  * the commanded rotation is known exactly, while the actual change in the two
+    half-axis angle is measured from the coordinates (these differ on a curved,
+    irregular starting window);
   * the bend direction is a free parameter (`azimuth`), so the Jacobian is
     averaged over it rather than being an artifact of one arbitrary plane.
 
@@ -43,6 +43,30 @@ from metrics import IDEAL, helix_on_arc, smooth_trace
 
 _EPS = 1e-12
 DEFAULT_AZIMUTHS = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)
+
+
+def _half_axis(P, start, end):
+    """Unit principal axis of one half, oriented from its first to last atom."""
+    X = np.asarray(P[start:end], float)
+    C = X - X.mean(axis=0)
+    _, s, vt = np.linalg.svd(C, full_matrices=False)
+    if not len(s) or s[0] < _EPS:
+        return None
+    axis = vt[0]
+    if np.dot(axis, X[-1] - X[0]) < 0:
+        axis = -axis
+    return axis / np.linalg.norm(axis)
+
+
+def half_axis_angle(P, mid=None):
+    """Angle between the two half-window principal axes, in degrees."""
+    P = np.asarray(P, float)
+    mid = len(P) // 2 if mid is None else mid
+    a = _half_axis(P, 0, mid + 1)
+    b = _half_axis(P, mid, len(P))
+    if a is None or b is None:
+        return float("nan")
+    return float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
 
 
 def _rot(axis, ang_rad):
@@ -107,10 +131,10 @@ def check_bond_lengths(P0, P1, tol=1e-8):
 
 def jacobian(metric, P, thetas=(0.0, 1.0, 2.0, 3.0, 5.0),
              azimuths=DEFAULT_AZIMUTHS, signed=False):
-    """d(metric)/d(theta) at `P`, averaged over bend azimuth.
+    """d(metric)/d(actual physical half-axis bend) at `P`.
 
     Returns dict(slope, r2, intercept, n_ok). `slope` is in degrees of metric
-    response per degree of imposed relative half-rotation.
+    response per degree of measured physical half-axis bend.
 
     With `signed=False` the response is measured as |m(theta) - m(0)|, which is
     what matters for a magnitude-based mover score and avoids cancellation when
@@ -118,19 +142,24 @@ def jacobian(metric, P, thetas=(0.0, 1.0, 2.0, 3.0, 5.0),
     """
     P = np.asarray(P, float)
     base = metric(P)
-    if not np.isfinite(base):
+    base_angle = half_axis_angle(P)
+    if not np.isfinite(base) or not np.isfinite(base_angle):
         return dict(slope=float("nan"), r2=float("nan"),
                     intercept=float("nan"), n_ok=0)
     resp, xs = [], []
     for th in thetas:
-        vals = []
+        vals, actual = [], []
         for az in azimuths:
-            m = metric(rigid_half_bend(P, th, az))
+            bent = rigid_half_bend(P, th, az)
+            m = metric(bent)
             if np.isfinite(m):
                 vals.append(m - base if signed else abs(m - base))
-        if vals:
+                angle = half_axis_angle(bent)
+                if np.isfinite(angle):
+                    actual.append(abs(angle - base_angle))
+        if vals and actual:
             resp.append(float(np.mean(vals)))
-            xs.append(th)
+            xs.append(float(np.mean(actual)))
     if len(xs) < 3:
         return dict(slope=float("nan"), r2=float("nan"),
                     intercept=float("nan"), n_ok=len(xs))

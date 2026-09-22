@@ -163,20 +163,21 @@ def stage2():
                              for b in BENDS])
             if np.all(np.isnan(vals)):
                 print(f"      {ss:12s} abstains (inadmissible construction here)")
-                out[(c.name, ss)] = (float("nan"), float("nan"), False)
+                out[(c.name, ss)] = (np.array([float("nan")]), float("nan"),
+                                     float("nan"), False)
                 continue
             A = np.column_stack([BENDS, np.ones(len(BENDS))])
             slope, icpt = np.linalg.lstsq(A, vals, rcond=None)[0]
             pred = A @ [slope, icpt]
             sst = ((vals - vals.mean()) ** 2).sum()
             r2 = 1 - ((vals - pred) ** 2).sum() / sst if sst > 1e-12 else float("nan")
-            _, m_signed, m_abs, consistent = phase_slopes(c, ss)
+            phase_s, m_signed, m_abs, consistent = phase_slopes(c, ss)
             print(f"      {ss:12s} " + " ".join(f"{v:6.1f}" for v in vals))
             print(f"      {'':12s} phase-avg slope {m_signed:+.4f}   "
                   f"mean|per-phase| {m_abs:+.4f}   R2 {r2:7.4f}")
             print(f"      {'':12s} sign consistent across phase: "
                   f"{'YES' if consistent else 'NO  <-- signed analyses scrambled'}")
-            out[(c.name, ss)] = (float(m_abs), float(r2), bool(consistent))
+            out[(c.name, ss)] = (phase_s, float(m_abs), float(r2), bool(consistent))
         print()
     print("  Two slopes are reported because they answer different questions.")
     print("  'phase-avg slope' fits the phase-averaged signed value; 'mean|per-phase|'")
@@ -189,7 +190,8 @@ def stage2():
     print("      scrambled by a nuisance parameter (where in the turn the site sits).")
     print("  v1's Gate 2 reported Spearman(pred, obs) = 0.077 and read it as model")
     print("  insensitivity. A phase-dependent sign would produce that number on its")
-    print("  own. The ceiling in stage 6 uses mean|per-phase|, the magnitude gain.")
+    print("  own. Stage 6 retains the per-phase slope mixture when it simulates")
+    print("  thresholded AUC; mean|per-phase| is printed as a descriptive summary.")
     return out
 
 
@@ -208,14 +210,36 @@ def stage3():
             P0 = _ca(c, ss, 10.0)
             row = []
             for sg in SIGMA_XYZ:
-                v = np.array([c(P0 + rng.normal(0, sg, P0.shape)) for _ in range(N)])
-                v = v[np.isfinite(v)]
+                # Sample every helical phase.  Keeping only finite values without
+                # reporting how many were rejected turns abstention into an
+                # artificially quiet metric, especially for the beta branch.
+                samples = []
+                for ph in PHASES:
+                    P = _ca(c, ss, 10.0, ph)
+                    samples.extend(c(P + rng.normal(0, sg, P.shape)) for _ in range(N // len(PHASES)))
+                raw = np.asarray(samples, float)
+                finite = np.isfinite(raw)
+                v = raw[finite]
+                coverage = float(finite.mean())
+                straight_samples = []
+                for ph in PHASES:
+                    P = _ca(c, ss, 0.0, ph)
+                    straight_samples.extend(c(P + rng.normal(0, sg, P.shape))
+                                            for _ in range(N // len(PHASES)))
+                straight_coverage = float(np.isfinite(straight_samples).mean())
+                effective_coverage = min(coverage, straight_coverage)
                 sd = float(v.std()) if len(v) > 50 else float("nan")
                 row.append(sd)
                 if abs(sg - SIGMA_REF) < 1e-9:
-                    out[(c.name, ss)] = sd
+                    out[(c.name, ss)] = dict(sd=sd, coverage=effective_coverage,
+                                            coverage_at_bend=coverage,
+                                            coverage_straight=straight_coverage,
+                                            n_finite=int(finite.sum()),
+                                            n_total=int(finite.size))
             cells = " ".join("     abst" if np.isnan(x) else f"{x:>9.2f}" for x in row)
-            print(f"      {ss:>12} {cells}")
+            straight = out.get((c.name, ss), {}).get("coverage_straight")
+            suffix = "" if straight is None else f"  straight_cov={straight:.1%}"
+            print(f"      {ss:>12} {cells}{suffix}")
         print()
     print("  Noise gain is near-linear in sigma_xyz, so these scale. v1 adopted an")
     print(f"  empirical floor of 0.98 deg; at sigma_xyz={SIGMA_REF} A the v1 metric's")
@@ -325,7 +349,9 @@ def stage5():
     print("      'how far apart will this Ca sit in two independent crystals'. The")
     print("      Cruickshank DPI is the lower-bound counterpart but needs reflection")
     print("      counts, absent from a coordinate file. Ca B of 10-30 A^2 gives")
-    print(f"      0.11-0.20 A, consistent with the {SIGMA_REF} A used for the verdict.")
+    print("      0.356-0.616 A, so the SIGMA_REF value is an explicit sensitivity")
+    print(f"      assumption (equivalent B = {8*np.pi**2*SIGMA_REF**2:.2f} A^2), not a")
+    print("      typical Ca B-factor claim.")
 
     print("\n  (b) v1 fixed the mover threshold at 2*sigma_hat and never checked its")
     print("      null rate; it was 14-41%, not ~5% (AUDIT.md F2). v2 must SOLVE for")
@@ -366,27 +392,49 @@ def stage6(noise=None, slopes=None):
                                  for b in BENDS])
                 if np.all(np.isnan(vals)):
                     slopes[(c.name, ss)] = float("nan")
-                    noise[(c.name, ss)] = float("nan")
+                    noise[(c.name, ss)] = dict(
+                        sd=float("nan"), coverage=0.0, coverage_at_bend=0.0,
+                        coverage_straight=0.0, n_finite=0, n_total=0)
                     continue
-                slopes[(c.name, ss)] = phase_slopes(c, ss)[2]   # mean|per-phase|
-                P0 = _ca(c, ss, 10.0)
-                v = np.array([c(P0 + rng.normal(0, SIGMA_REF, P0.shape))
-                              for _ in range(2500)])
-                v = v[np.isfinite(v)]
-                noise[(c.name, ss)] = float(v.std()) if len(v) > 50 else float("nan")
+                phase_sl, _, _, _ = phase_slopes(c, ss)
+                slopes[(c.name, ss)] = phase_sl
+                recs = []
+                for ph in PHASES:
+                    P0 = _ca(c, ss, 10.0, ph)
+                    recs.extend(c(P0 + rng.normal(0, SIGMA_REF, P0.shape))
+                                for _ in range(2500 // len(PHASES)))
+                raw = np.asarray(recs, float)
+                finite = np.isfinite(raw)
+                vals_finite = raw[finite]
+                straight_recs = []
+                for ph in PHASES:
+                    P0 = _ca(c, ss, 0.0, ph)
+                    straight_recs.extend(c(P0 + rng.normal(0, SIGMA_REF, P0.shape))
+                                         for _ in range(2500 // len(PHASES)))
+                straight_coverage = float(np.isfinite(straight_recs).mean())
+                noise[(c.name, ss)] = dict(
+                    sd=float(vals_finite.std()) if len(vals_finite) > 50 else float("nan"),
+                    coverage=min(float(finite.mean()), straight_coverage),
+                    coverage_at_bend=float(finite.mean()),
+                    coverage_straight=straight_coverage,
+                    n_finite=int(finite.sum()), n_total=int(finite.size))
 
     from sklearn.metrics import roc_auc_score
     rng = np.random.default_rng(7)
     T = 60_000
 
-    def make_ceiling(slope, sig_m):
+    def make_ceiling(phase_slopes, noise_record):
         """Build a ceiling(tau) closure, drawing the noise ONCE for speed.
 
         The aggregation noise and the FPR-calibrated threshold depend only on
         (sig_m, N_WT, N_MUT), so they are computed once per candidate rather
         than once per tau -- the bisection below calls this ~50 times per row.
         """
-        if not np.isfinite(slope) or not np.isfinite(sig_m) or slope <= 1e-9:
+        phase_slopes = np.asarray(phase_slopes, float)
+        sig_m = noise_record["sd"]
+        coverage = noise_record["coverage"]
+        if (not np.isfinite(sig_m) or not np.isfinite(coverage)
+                or coverage <= 0 or not np.isfinite(phase_slopes).all()):
             return lambda tau: float("nan")
         agg = (np.median(rng.normal(0, sig_m, (T, N_MUT)), axis=1)
                - np.median(rng.normal(0, sig_m, (T, N_WT)), axis=1))
@@ -394,13 +442,20 @@ def stage6(noise=None, slopes=None):
                 - np.median(rng.normal(0, sig_m, (T, N_WT)), axis=1))
         thr = float(np.quantile(np.abs(null), 1 - TARGET_FPR))
         z = rng.standard_normal(T)              # reused, scaled by tau
+        sl = phase_slopes[rng.integers(0, len(phase_slopes), T)]
+        valid = rng.random(T) < coverage ** 2
 
         def ceiling(tau):
             t = tau * z
-            mov = np.abs(slope * t + agg) > thr
-            if not (0 < mov.sum() < T):
+            # The phase is a nuisance variable. Draw its calibrated response
+            # rather than replacing it by mean(|slope|), which is not equivalent
+            # after thresholding.  Both WT and mutant labels must be finite.
+            mov = np.abs(sl * t + agg) > thr
+            mov = mov[valid]
+            score = np.abs(t)[valid]
+            if len(mov) < 20 or not (0 < mov.sum() < len(mov)):
                 return float("nan")
-            return float(roc_auc_score(mov, np.abs(t)))
+            return float(roc_auc_score(mov, score))
         return ceiling
 
     TAUS = (1.0, 2.0, 5.0, 10.0, 20.0)
@@ -411,23 +466,25 @@ def stage6(noise=None, slopes=None):
     rows = []
     for c in cands:
         for ss in SS_MAIN:
-            sl, sg = slopes[(c.name, ss)], noise[(c.name, ss)]
-            if not np.isfinite(sl) or not np.isfinite(sg):
+            sl, noise_record = slopes[(c.name, ss)], noise[(c.name, ss)]
+            if (not np.isfinite(np.asarray(sl, float)).all()
+                    or not np.isfinite(noise_record["sd"])):
                 print(f"  {c.name:>20} {ss:>12} {'abstains / inadmissible':>50}")
                 continue
-            cf = make_ceiling(sl, sg)
+            cf = make_ceiling(sl, noise_record)
             cs = [cf(t) for t in TAUS]
-            print(f"  {c.name:>20} {ss:>12} {sl:>7.3f} {sg:>7.2f} "
+            print(f"  {c.name:>20} {ss:>12} {np.mean(np.abs(sl)):>7.3f} "
+                  f"{noise_record['sd']:>7.2f} cov={noise_record['coverage']:.2%} "
                   + " ".join(f"{v:>9.3f}" for v in cs))
-            rows.append((c, ss, sl, sg, cs))
+            rows.append((c, ss, sl, noise_record, cs))
     print("\n  tau = SD of the TRUE mutation-induced full-span axis bend, in degrees.")
 
     print("\n  Inverted -- the number the real-data step has to beat:")
     print(f"  {'candidate':>20} {'SS':>12} {'tau* (AUC .75)':>15} {'tau* (.85)':>11} "
           f"{'Ca displacement':>17}")
     best = []
-    for c, ss, sl, sg, _ in rows:
-        cf = make_ceiling(sl, sg)
+    for c, ss, sl, noise_record, _ in rows:
+        cf = make_ceiling(sl, noise_record)
         got = {}
         for target in (0.75, 0.85):
             lo, hi = 0.02, 500.0
@@ -446,7 +503,7 @@ def stage6(noise=None, slopes=None):
               f"{(f'{got[0.75]:.2f}' if reach else '>480'):>15} "
               f"{(f'{got[0.85]:.2f}' if got[0.85] < 480 else '>480'):>11} "
               f"{(f'{disp:.2f} A' if reach else 'unreachable'):>17}")
-        best.append((c, ss, sl, sg, got[0.75], disp))
+        best.append((c, ss, sl, noise_record, got[0.75], disp))
     print("\n  'Ca displacement' converts tau*(AUC 0.75) into the mid-span deflection")
     print("  of the axis (sagitta = L*theta/8) -- the physically interpretable form.")
     print("  Point mutations typically move local backbone by ~0.1-0.5 A, so a tau*")
@@ -457,7 +514,8 @@ def stage6(noise=None, slopes=None):
 
 def verdict(best):
     hdr("V", "VERDICT")
-    print(f"  coordinate error assumed : {SIGMA_REF} A  (Ca B-factor ~20-30 A^2)")
+    print(f"  coordinate error assumed : {SIGMA_REF} A  (equivalent B "
+          f"{8*np.pi**2*SIGMA_REF**2:.2f} A^2; B-factor is not coordinate error)")
     print(f"  target null FPR          : {TARGET_FPR:.0%}")
     print(f"  aggregation              : {N_WT} WT / {N_MUT} mutant crystals, median")
     print(f"  plausibility bound       : Ca displacement <= 0.50 A\n")
