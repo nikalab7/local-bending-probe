@@ -1,5 +1,32 @@
 # local-bending-probe
 
+> ### ⚠️ Status: v1 below is frozen as a legacy / audit record
+>
+> An independent mathematical audit ([`AUDIT.md`](AUDIT.md)) found that the v1
+> bending metric does not measure what the text below claims, and that the
+> quantitative results are not currently supportable. The v2 measurement gate
+> ([`v2/`](v2/)) then identified the specific cause:
+>
+> **v1's metric is blind to axis bending in helical geometry** — its response to
+> true axis curvature has slope 0.013 in an α-helix (vs 0.500 in a β-strand), so
+> its *achievable* AUC ceiling there is ~0.50 no matter how large the real effect
+> is. It also converts local twist change into apparent "bending" at nearly 1:1.
+> T4 lysozyme is helix-rich, so for most windows v1 scored, no model could have
+> beaten chance. The reported AUC ≈ 0.52 is the ceiling, not a model failure.
+>
+> Consequently the following claims are **withdrawn pending v2** and should not be
+> cited: the 29% above-noise-floor rate, AUC 0.52 / 0.59 / 0.70, the 136,961-window
+> / ≤30%-identity leakage-controlled framing, and the conclusion that backbone
+> bending is governed primarily by tertiary interactions.
+>
+> Nothing has been deleted — the research trail is deliberately preserved, including
+> the errors. The v2 rebuild is on branch `v2-benchmark-rebuild`; the measurement
+> gate has **passed**, so the label is usable once the metric is replaced.
+>
+> Everything below this banner is the original v1 write-up, unedited.
+
+---
+
 ## How much information about protein backbone bending is contained in local sequence?
 
 Modern protein-structure models rely heavily on long-range interactions and evolutionary information. This project asks a simpler question:
