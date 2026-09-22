@@ -4,24 +4,34 @@
 >
 > An independent mathematical audit ([`AUDIT.md`](AUDIT.md)) found that the v1
 > bending metric does not measure what the text below claims, and that the
-> quantitative results are not currently supportable. The v2 measurement gate
-> ([`v2/`](v2/)) then identified the specific cause:
+> quantitative results are not currently supportable. Two defects in the metric
+> are established by direct measurement ([`v2/`](v2/)):
 >
-> **v1's metric is blind to axis bending in helical geometry** — its response to
-> true axis curvature has slope 0.013 in an α-helix (vs 0.500 in a β-strand), so
-> its *achievable* AUC ceiling there is ~0.50 no matter how large the real effect
-> is. It also converts local twist change into apparent "bending" at nearly 1:1.
-> T4 lysozyme is helix-rich, so for most windows v1 scored, no model could have
-> beaten chance. The reported AUC ≈ 0.52 is the ceiling, not a model failure.
+> * **It is a secondary-structure classifier, not a curvature metric.** On a
+>   perfectly *straight* axis it reads 110° for an α-helix, 132° for a π-helix,
+>   67° for 3₁₀, 34° for PPII and 0° for a β-strand.
+> * **It confuses twist with bend.** In an α-helix it responds to a change in
+>   local twist at 1.026° per degree — about 3× its sensitivity to actual axis
+>   bending — and its *sign* flips depending on where in the helical turn the
+>   window sits, which scrambles any signed analysis (v1's Gate 2 reported
+>   Spearman 0.077 and attributed it to the model).
 >
-> Consequently the following claims are **withdrawn pending v2** and should not be
-> cited: the 29% above-noise-floor rate, AUC 0.52 / 0.59 / 0.70, the 136,961-window
-> / ≤30%-identity leakage-controlled framing, and the conclusion that backbone
+> The following claims are **withdrawn pending v2** and should not be cited: the
+> 29% above-noise-floor rate, AUC 0.52 / 0.59 / 0.70, the 136,961-window /
+> ≤30%-identity leakage-controlled framing, and the conclusion that backbone
 > bending is governed primarily by tertiary interactions.
 >
+> An earlier version of this banner additionally claimed v1's achievable AUC
+> ceiling in helices was ~0.50, i.e. that no model could have beaten chance.
+> **That claim was wrong** — it came from an averaging bug in the v2 gate, and is
+> retracted in [`v2/CORRECTIONS.md`](v2/CORRECTIONS.md). Why v1 measured AUC 0.52
+> is still open.
+>
 > Nothing has been deleted — the research trail is deliberately preserved, including
-> the errors. The v2 rebuild is on branch `v2-benchmark-rebuild`; the measurement
-> gate has **passed**, so the label is usable once the metric is replaced.
+> the errors, mine as well as v1's. The v2 rebuild is on branch
+> `v2-benchmark-rebuild`. The measurement gate **passed on ideal geometry**, which
+> establishes the replacement metric is sound; whether the *label* is usable on real
+> PDB data is **not yet established** and needs an empirical seed test.
 >
 > Everything below this banner is the original v1 write-up, unedited.
 

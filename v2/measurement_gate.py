@@ -74,6 +74,37 @@ def _mean(vals):
     return float("nan") if np.all(np.isnan(v)) else float(np.nanmean(v))
 
 
+def phase_slopes(cand, ss, bends=BENDS, phases=PHASES):
+    """Per-phase SIGNED slope of the metric vs true arc bend.
+
+    Fitting the phase-AVERAGED signed value -- which an earlier version of this
+    gate did -- silently cancels any response whose sign depends on helical
+    phase, and reports a slope near zero for a metric that is in fact responding
+    strongly. That produced a spurious "ceiling 0.50" for v1 on alpha-helices.
+    See CORRECTIONS.md.
+
+    Returns (per_phase_slopes, mean_signed, mean_abs, sign_consistent) where
+      mean_signed  : what the broken version measured; near 0 under cancellation
+      mean_abs     : mean |per-phase slope| -- the sensitivity a MAGNITUDE score
+                     such as |delta| actually gets, and the right input to a
+                     mover-retrieval ceiling
+      sign_consistent : False if the response changes sign across phase, which
+                     scrambles any SIGNED analysis (correlation, direction)
+    """
+    r, rise, turn = IDEAL[ss]
+    A = np.column_stack([bends, np.ones(len(bends))])
+    out = []
+    for ph in phases:
+        vals = np.array([cand(helix_on_arc(cand.span, r, rise, turn, b, ph))
+                         for b in bends], float)
+        if np.isnan(vals).any():
+            return None, float("nan"), float("nan"), None
+        out.append(float(np.linalg.lstsq(A, vals, rcond=None)[0][0]))
+    s = np.array(out)
+    return (s, float(s.mean()), float(np.abs(s).mean()),
+            bool(not (s.min() < 0 < s.max())))
+
+
 # --------------------------------------------------------------------------- #
 def stage1():
     hdr(1, "CRITERION 1 -- does a STRAIGHT axis read zero?")
@@ -139,16 +170,26 @@ def stage2():
             pred = A @ [slope, icpt]
             sst = ((vals - vals.mean()) ** 2).sum()
             r2 = 1 - ((vals - pred) ** 2).sum() / sst if sst > 1e-12 else float("nan")
-            mono = bool(np.all(np.diff(vals) > -0.25))
+            _, m_signed, m_abs, consistent = phase_slopes(c, ss)
             print(f"      {ss:12s} " + " ".join(f"{v:6.1f}" for v in vals))
-            print(f"      {'':12s} slope {slope:+.4f}  R2 {r2:7.4f}  "
-                  f"intercept {icpt:+6.2f}  monotonic {mono}")
-            out[(c.name, ss)] = (float(slope), float(r2), mono)
+            print(f"      {'':12s} phase-avg slope {m_signed:+.4f}   "
+                  f"mean|per-phase| {m_abs:+.4f}   R2 {r2:7.4f}")
+            print(f"      {'':12s} sign consistent across phase: "
+                  f"{'YES' if consistent else 'NO  <-- signed analyses scrambled'}")
+            out[(c.name, ss)] = (float(m_abs), float(r2), bool(consistent))
         print()
-    print("  Intercept is the criterion-1 offset; slope is the usable signal gain.")
-    print("  A candidate with slope ~0 cannot see axis bend at all, and one with low")
-    print("  R2 sees it non-linearly, which makes a difference-of-two-windows")
-    print("  measurement conformation-dependent.")
+    print("  Two slopes are reported because they answer different questions.")
+    print("  'phase-avg slope' fits the phase-averaged signed value; 'mean|per-phase|'")
+    print("  averages the magnitude of each phase's own slope. They diverge exactly")
+    print("  when the response changes SIGN with helical phase -- the same physical")
+    print("  bend reading positive at one point in the turn and negative a third of a")
+    print("  turn later. When that happens:")
+    print("    * a MAGNITUDE score (|delta|) still works, at mean|per-phase| gain;")
+    print("    * any SIGNED analysis -- correlation, direction of change -- is")
+    print("      scrambled by a nuisance parameter (where in the turn the site sits).")
+    print("  v1's Gate 2 reported Spearman(pred, obs) = 0.077 and read it as model")
+    print("  insensitivity. A phase-dependent sign would produce that number on its")
+    print("  own. The ceiling in stage 6 uses mean|per-phase|, the magnitude gain.")
     return out
 
 
@@ -248,6 +289,10 @@ def stage4():
     print("      with ~0.5 turns a 2 deg twist change into ~1 deg of fake bending.")
     print("      This is the real decision axis: the bisector family trades noise")
     print("      for zero differential bias, the smoothed family the reverse.")
+    print("      More crystals per variant shrink the IID part of the noise but not")
+    print("      a twist-coupled systematic -- nor the correlated part of real")
+    print("      crystal-to-crystal variation (packing, refinement era, construct).")
+    print("      See CORRECTIONS.md C2: sigma^2(n) = sigma^2_iid/n + sigma^2_syst.")
 
 
 def stage5():
@@ -304,8 +349,7 @@ def stage6(noise=None, slopes=None):
                     slopes[(c.name, ss)] = float("nan")
                     noise[(c.name, ss)] = float("nan")
                     continue
-                A = np.column_stack([BENDS, np.ones(len(BENDS))])
-                slopes[(c.name, ss)] = float(np.linalg.lstsq(A, vals, rcond=None)[0][0])
+                slopes[(c.name, ss)] = phase_slopes(c, ss)[2]   # mean|per-phase|
                 P0 = _ca(c, ss, 10.0)
                 v = np.array([c(P0 + rng.normal(0, SIGMA_REF, P0.shape))
                               for _ in range(2500)])
@@ -408,8 +452,8 @@ def verdict(best):
         print("  require more crystals per variant, widen the span, or report the")
         print("  measurement limit itself as the result.")
     else:
-        print("  LABEL USABLE -- oracle AUC 0.75 is reachable within a plausible")
-        print("  effect size for:")
+        print("  GATE PASSED ON IDEAL GEOMETRY -- oracle AUC 0.75 is reachable within")
+        print("  a plausible effect size, on exact/iid-perturbed ideal geometry, for:")
         for c, ss, d in sorted(ok, key=lambda x: x[2]):
             print(f"      {c.name:>20}  {ss:<12}  needs Ca displacement {d:.2f} A")
         print()
@@ -428,10 +472,15 @@ def verdict(best):
         print("      If SS-only already explains most of it, the 'local model skill'")
         print("      was structure-class prediction. Only a direct-delta model that")
         print("      fails while the ceiling is HIGH is a real negative ML result.")
-    print("\n  Carried forward: every number here is exact or perturbed IDEAL geometry.")
-    print("  That is the right scope for a gate -- it bounds what the measurement can")
-    print("  do, independent of any dataset. But tau is empirical: this gate says")
-    print("  which tau matters and how precisely it must be known, not what it is.")
+    print("\n  NOT a statement that the label is usable on real data. Every number")
+    print("  here is exact or iid-perturbed IDEAL geometry; real helices are pre-bent,")
+    print("  frayed and irregular, with correlated non-Gaussian coordinate error, and")
+    print("  tau is empirical. What this gate establishes is that the metric")
+    print("  CONSTRUCTION is sound. The empirical seed test is what decides the label:")
+    print("  20-50 curated variants, within-variant repeatability (iid vs systematic,")
+    print("  stratified by crystal form), the observed WT->mutant delta distribution,")
+    print("  tau, the null mover FPR, and the real-coordinate Jacobian from")
+    print("  perturbation.py. Only then is a full RCSB/SIFTS miner worth building.")
 
 
 def stage7():
@@ -483,9 +532,12 @@ def stage7():
                 cells.append(f"{d:10.2f}" if tau < 380 else f"{'--':>10}")
             print(f"      {sg_xyz:>10.2f} " + " ".join(cells))
         print()
-    print("  Reading: more crystals per variant buys resolution roughly as 1/sqrt(n),")
-    print("  and it is the ONLY lever that helps without changing the measurement --")
-    print("  noise averages down, whereas the differential bias of stage 4c does not.")
+    print("  Reading: more crystals per variant buys resolution as 1/sqrt(n) -- but")
+    print("  ONLY for the iid component simulated here. Real redundant crystals also")
+    print("  share systematic effects (packing, space group, refinement protocol and")
+    print("  era, construct, cryo vs RT, ligand state) that do NOT shrink with n, so")
+    print("  the true curve flattens onto a floor this table does not contain.")
+    print("  Treat every entry as an OPTIMISTIC bound. See CORRECTIONS.md C2.")
     print("  So the binding constraint on benchmark v2 is not the number of variants,")
     print("  it is the number of CRYSTALS PER VARIANT. That is the opposite of how v1")
     print("  was assembled: v1 spent its redundancy inflating n (248 rows from 69")

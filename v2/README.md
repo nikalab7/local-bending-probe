@@ -1,6 +1,9 @@
 # v2 — Measurement Gate
 
-**Status: gate PASSED. The label is usable. Proceed to benchmark v2.**
+**Status: gate PASSED on ideal geometry. The replacement metric is sound.
+Whether the LABEL is usable on real PDB data is NOT yet established — that needs
+the empirical seed test.** See [`CORRECTIONS.md`](CORRECTIONS.md) for three claims
+from the first version of this file that were withdrawn, two of them my own errors.
 
 This directory is step 2 of the v2 rebuild: settle the *measurement* before any
 model is trained again. No ML, no PDB downloads, no dataset — just geometry,
@@ -15,7 +18,9 @@ python3 measurement_gate.py 1 4      # selected stages
 ```
 
 Files: `metrics.py` (candidate metrics + exact ground-truth generator),
-`measurement_gate.py` (the gate).
+`measurement_gate.py` (the gate), `perturbation.py` (controlled deformation and
+local Jacobian for **real** coordinates — the tool the seed test needs),
+`CORRECTIONS.md` (withdrawn claims).
 
 ---
 
@@ -51,26 +56,37 @@ have distinguished any of these candidates.
 
 ## What the gate found
 
-### 1. v1's metric is blind to axis bend in helices — its ceiling was 0.50
+### 1. v1's metric gives the same bend opposite signs depending on helical phase
 
-The decisive number. Response to *true* axis bend, and the resulting ceiling:
+> **Retraction.** The first version of this section claimed v1's oracle ceiling in
+> α-helices was ~0.50, so "no model could have beaten chance". **That was wrong**
+> — it came from an averaging bug in my own gate (phase-averaging a signed
+> response cancelled it). Full retraction in [`CORRECTIONS.md`](CORRECTIONS.md).
+> Why v1 measured AUC 0.52 remains open.
 
-| metric | conformation | slope | noise @0.2 Å | oracle AUC, any τ ≤ 20° |
-|---|---|---|---|---|
-| `v1_pca5` | **α-helix** | **0.013** | 4.46° | **0.496 – 0.498** |
-| `v1_pca5` | 3₁₀-helix | 0.049 | 7.11° | 0.493 – 0.510 |
-| `v1_pca5` | PPII | 0.110 | 4.45° | 0.503 – 0.651 |
-| `v1_pca5` | β-strand | 0.500 | 3.76° | 0.523 – 0.913 |
+What the corrected measurement shows. Per-phase signed slope vs true axis bend on
+an ideal α-helix:
 
-v1's metric responds to axis curvature **only in β-strands**. In helical and
-turn-like geometry its slope is 5–40× smaller, and the oracle ceiling is ~0.50
-*regardless of how large the true effect is* — `tau*` for α-helix is 280° (3.66 Å),
-i.e. unreachable.
+| metric | signed slope range | sign flips? | mean \|slope\| |
+|---|---|---|---|
+| `v1_pca5` | −0.476 … +0.443 | **yes** | 0.316 |
+| `smooth_chord` w=4 | −0.220 … +0.302 | **yes** | 0.177 |
+| **`hybrid`** | **+0.862 … +1.120** | **no** | **0.997** |
 
-T4 lysozyme is helix-rich and v1's "core" subset was helix+sheet. So for most of
-the windows v1 scored, **no model could have beaten chance.** The reported
-AUC 0.477–0.524 is the ceiling, not a model failure. This is the mechanism behind
-`AUDIT.md` F8, now localized to a specific geometric cause.
+v1's metric assigns the *same physical bend* a positive or a negative value
+depending on where in the helical turn the window sits. That has two distinct
+consequences, and conflating them is what produced the retracted claim:
+
+* a **magnitude** score (`|Δ|`, which is what mover AUC uses) is unaffected in
+  principle and gets the mean|per-phase| gain — corrected ceiling for v1 on
+  α-helix is 0.600 at τ=5° and 0.719 at τ=10°, not 0.50;
+* any **signed** analysis is scrambled by a nuisance parameter. v1's Gate 2
+  reported `Spearman(pred, obs) = 0.077` and read it as model insensitivity
+  ("AF2 disease") — a phase-dependent metric sign produces that number on its
+  own, with no model defect required.
+
+The hybrid is phase-consistent, so it is still the better metric — 0.695 vs 0.600
+at τ=5° — but that is a quantitative improvement, not a qualitative rescue.
 
 ### 2. A straight axis must read zero — only the bisector family does
 
@@ -139,26 +155,39 @@ twist change:
 | `circlefit` w=4 | 0.880 | 0.000 | 6.213 | 7.513 |
 | `bisector` / `hybrid` | **0.000** | **0.000** | **0.000** | **0.000** |
 
-Put the two sensitivities side by side and v1's metric stops being ambiguous:
+Put the two sensitivities side by side (using the **corrected** bend slopes —
+mean|per-phase|, per §1 and `CORRECTIONS.md`):
 
 | conformation | d/d(axis bend) | d/d(twist) | **twist : bend** |
 |---|---|---|---|
-| α-helix | 0.013 | 1.026 | **79 ×** |
-| 3₁₀-helix | 0.049 | 1.428 | **29 ×** |
-| PPII | 0.110 | 0.800 | 7 × |
+| α-helix | 0.316 | 1.026 | **3.2 ×** |
+| 3₁₀-helix | 0.287 | 1.428 | **5.0 ×** |
+| PPII | 0.294 | 0.800 | 2.7 × |
 | β-strand | 0.500 | 0.000 | 0 × |
 
-**In an α-helix, v1's metric responds ~79× more strongly to a change in local
-twist than to actual axis bending.** So whatever it measured in helical windows was
-essentially twist change wearing the name "bending" — and re-twisting a helix is
-exactly what changing helix propensity by mutation does. This is a confound on
-v1's "29% of mutations move backbones" entirely separate from the noise and
-threshold problems in `AUDIT.md` F2/F4, and it points the same way.
+**In an α-helix, v1's metric responds ~3× more strongly to a change in local twist
+than to actual axis bending** — so twist change is its dominant systematic, and
+re-twisting a helix is exactly what changing helix propensity by mutation does.
+This is a confound on v1's "29% of mutations move backbones" separate from the
+noise and threshold problems in `AUDIT.md` F2/F4.
+
+> An earlier version of this table quoted **79×** and **29×**, using the
+> phase-cancelled bend slopes (0.013, 0.049). Those ratios are withdrawn; the
+> `d/d(twist)` column is unaffected, because on a straight axis the metric has no
+> phase dependence to cancel.
 
 This is why the noisier metric wins. `smooth_chord` is ~2.5× quieter than the
 hybrid (1.2–2.7° vs 3.7–7.8° at σ=0.2 Å), but it carries a 0.656 twist coupling in
-α-helices. **Noise averages down with more crystals; differential bias does not.**
-So the hybrid is the right trade for a difference measurement.
+α-helices, and a twist-coupled systematic is not something more data fixes.
+
+> **Correction.** This section previously asserted flatly that "noise averages down
+> with more crystals; differential bias does not". That holds only for **iid**
+> noise. Real crystal-to-crystal variation also has components correlated across
+> crystals of one variant — packing and space group, refinement protocol and
+> deposition era, construct/background, cryo vs RT, ligand state — so the honest
+> model is `σ²(n) = σ²_iid/n + σ²_systematic`, which tends to `σ_systematic`, not 0.
+> The size of that floor is unknown and only estimable from real redundant
+> crystals. See `CORRECTIONS.md` C2.
 
 ### 5. The threshold must be solved for, not assumed
 
@@ -204,32 +233,53 @@ hybrid across the sensitivity grid:
 
 (α-helix; β-strand is similar except 0.58 Å at 0.30 Å / 1WT-1mut.)
 
-Even **one crystal per side** clears the bar at σ ≤ 0.2 Å. That matters, because
-redundancy is scarce — from v1's own CSV, median 2 crystals per residue, and only
-17% of residues have ≥5:
+On these **synthetic, iid-noise-only** numbers even one crystal per side clears
+the bar at σ ≤ 0.2 Å. Do not read that as benchmark readiness: the 1/√n scaling
+assumes iid noise, and the systematic floor (`CORRECTIONS.md` C2) is not in this
+table because it cannot be estimated without real redundant crystals. Treat the
+row as a sensitivity result, not a green light.
+
+Redundancy is scarce anyway — from v1's own CSV, median 2 crystals per residue,
+and only 17% of residues have ≥5:
 
 | crystals per residue | ≥1 | ≥2 | ≥3 | ≥5 | ≥10 |
 |---|---|---|---|---|---|
 | residues (of 69) | 100% | 62% | 38% | 17% | 3% |
 
-So crystals-per-variant is a resolution *bonus*, not a gate. Worth noting v1 spent
-its redundancy the wrong way round — inflating n to 248 rows from 69 residues
-(`AUDIT.md` F3) instead of averaging it down into the label.
+Under iid noise alone, crystals-per-variant would be a resolution bonus rather
+than a gate. With a systematic floor it may well be a gate — that is one of the
+things the seed test has to settle, and it is why the seed test should stratify
+redundant crystals by crystal form rather than pooling them. Worth noting v1 spent
+its redundancy the wrong way round either way: inflating n to 248 rows from 69
+residues (`AUDIT.md` F3) instead of averaging it down into the label.
 
 ---
 
 ## What this does and does not establish
 
-**Does.** The measurement is not the bottleneck — *provided* the metric is an axis
-metric. v1's negative result is explained by its metric being blind to axis bend in
-helical geometry (slope 0.013, ceiling 0.50) and by converting twist change into
-fake bending at ~1:1. Neither is a fact about protein sequence.
+**Does.** The replacement metric construction is sound: exact on a straight axis
+for every regular conformation, phase-consistent, linear against ground truth, and
+free of the twist coupling. And v1's metric has two demonstrable defects — large
+SS-dependent offsets, and a phase-dependent sign that scrambles signed analyses
+(which is a candidate explanation for its Spearman 0.077). Neither is a fact about
+protein sequence.
 
-**Does not.** Every number here is exact or perturbed *ideal* geometry. That is the
-right scope for a gate — it bounds what the measurement can do independent of any
-dataset — but the true effect size τ is empirical. The gate says which τ matters
-and how precisely it must be known; it does not say what τ is. Closing that is step
-3 of benchmark v2.
+**Does not.** Three things, and they are load-bearing:
+
+1. **It does not establish that the label is usable on real data.** Every number
+   is exact or iid-perturbed *ideal* geometry. Real helices are pre-bent, frayed,
+   irregular in rise and twist, with correlated non-Gaussian coordinate error.
+   Whether these slopes and noise figures transfer is unmeasured.
+2. **It does not pin τ.** The gate says which τ matters and how precisely it must
+   be known; it does not say what τ is. That is empirical.
+3. **It does not explain v1's AUC 0.52.** The ceiling explanation is retracted
+   (§1). That question is reopened, not answered.
+
+It also probed only one deformation mode (a distributed arc). `perturbation.py`
+adds a midpoint kink that preserves every Cα-Cα distance exactly; the two modes
+turn out to give similar sensitivity for v1 (ratio 0.7–1.2× across conformations),
+so this particular worry did not materialise — but which mode real point mutations
+produce is open, and it changes what the right metric is.
 
 Known residuals, not swept under the rug:
 * hybrid underestimates bend by ~18% in π-helix (single calibration constant
