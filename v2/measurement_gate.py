@@ -476,15 +476,17 @@ def stage6(noise=None, slopes=None):
             print(f"  {c.name:>20} {ss:>12} {np.mean(np.abs(sl)):>7.3f} "
                   f"{noise_record['sd']:>7.2f} cov={noise_record['coverage']:.2%} "
                   + " ".join(f"{v:>9.3f}" for v in cs))
-            rows.append((c, ss, sl, noise_record, cs))
+            # Reuse this closure for the inversion below.  Re-drawing the
+            # Monte-Carlo sample would make the printed table and tau* solve
+            # disagree and could break bisection monotonicity.
+            rows.append((c, ss, sl, noise_record, cs, cf))
     print("\n  tau = SD of the TRUE mutation-induced full-span axis bend, in degrees.")
 
     print("\n  Inverted -- the number the real-data step has to beat:")
     print(f"  {'candidate':>20} {'SS':>12} {'tau* (AUC .75)':>15} {'tau* (.85)':>11} "
           f"{'Ca displacement':>17}")
     best = []
-    for c, ss, sl, noise_record, _ in rows:
-        cf = make_ceiling(sl, noise_record)
+    for c, ss, sl, noise_record, _, cf in rows:
         got = {}
         for target in (0.75, 0.85):
             lo, hi = 0.02, 500.0
