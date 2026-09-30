@@ -168,6 +168,9 @@ python delta_model.py             # -> results/delta_model.json, delta_model.png
 python delta_model.py --z 3       # sensitivity: stricter mover threshold
 python delta_model.py --prior pooled  # sensitivity: old single-sigma noise-floor prior
 
+# v3: systematic miner (RCSB + SIFTS), ~6k entries, ~700 MB in mined_pdb/
+python mine_pairs.py              # pinned in manifests/mined.json; pairs/delta_model pick it up
+
 python -m pytest tests/           # offline synthetic tests (no network)
 ```
 
@@ -200,6 +203,18 @@ Both are covered by offline synthetic tests (`tests/`). Full numbers and robustn
 * **Substitution identity adds nothing once the site is known.** Paired ΔAUC (site+subst − site) = −0.02 [−0.06, +0.02]. Under all eight label definitions tried (z>2 or z>3; noise-floor prior pooled, B-factor, B-factor + WT bend, or none) it is ≤ +0.01 with CIs spanning 0. This is the local-sequence question asked directly, with an engine that can see a Δ, and the answer is still no.
 * **Where the mutation sits carries a modest signal.** The main drivers are WT window bend (straighter windows move more), window B-factor and non-local contacts. A B-factor-conditioned noise floor removes the obvious confound (B correlates with WT noise, ρ = 0.51), and the signal stays. Adding WT bend to the prior as well weakens it to 0.60 [0.50, 0.69] at z>2 (0.68 at z>3). More proteins would be needed to separate flexibility-driven noise from flexibility-driven movement.
 * Gradient boosting overfits at this sample size, so the tables report logistic regression. Details and all robustness checks are in `RESULTS.md`.
+
+**v3: 191 proteins from a systematic RCSB + SIFTS miner** (`mine_pairs.py`; 892 clean mutations, 335 movers, 158 sequence families):
+
+| model (logistic regression) | leave-family-out AUC |
+|---|---|
+| secondary structure only | 0.51 [0.47, 0.55] |
+| site | 0.60 [0.56, 0.63] |
+| site + substitution | 0.59 [0.56, 0.63] |
+
+* **"What" (the substitution, i.e. local sequence) has no edge:** ΔAUC −0.002 [−0.03, +0.02].
+* **"Where" has a small, real edge.** It beats SS by +0.085 [+0.05, +0.12]. A WT-vs-WT null control (held-out WT crystals scored as pseudo-mutants) shows that more than half of its margin above chance is predictability of WT noise (a noise-only score reaches 0.555). The movement-specific remainder is ΔAUC ≈ +0.05 [+0.01, +0.08], carried mainly by non-local contacts.
+* The z threshold is close to calibrated: 6.9% pseudo-movers against 37.6% real movers.
 
 ---
 
