@@ -172,11 +172,11 @@ python -m pytest tests/           # offline synthetic tests (no network)
 
 The scripts must run in this order: later gates reuse the PDB caches (`t4l_pdb/`, `cull_pdb/`, `val_pdb/`) that earlier gates download. On the first run, every RCSB search result is pinned to `manifests/*.json` (see `stats_utils.pinned_ids`). Commit those files so that later runs use the same entries, since live searches drift as the PDB grows. To refresh against today's PDB on purpose, delete a manifest.
 
-> **Status of the numbers.** The figures in this README and in `RESULTS.md` come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic.
+> **Status of the numbers.** The Gate 1–5 figures in this README and in `RESULTS.md` come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic. The v2 numbers below come from the current code.
 
 ---
 
-## v2: clean labels and a delta-targeted model (not yet run on real data)
+## v2: clean labels and a delta-targeted model
 
 An audit of the Gate 1–5 pipeline found problems that bear on the headline conclusion:
 
@@ -186,7 +186,19 @@ An audit of the Gate 1–5 pipeline found problems that bear on the headline con
 
 `pairs.py` rebuilds the labels per SPEC §2.2–2.4. It applies a resolution cut (≤2.5 Å), compares each mutant only with WT crystals of the same crystal form, drops mutant crystals whose ligands near the window differ from the form's WT, and aggregates to one row per mutation. The noise floor is shrunk toward the pooled value, and the mover threshold is a z-test on the median difference. `delta_model.py` then predicts movers directly from **site** features (SS, B-factor, burial, contacts, WT bend) and **substitution** features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial). It uses leave-site-out and leave-protein-out CV. The decisive test is the paired ΔAUC of *site+substitution* over *site*: does the substitution identity add anything once the site is known?
 
-Both are covered by offline synthetic tests (`tests/`). They have **not** been run on the real PDB caches, because RCSB was unreachable from the environment where they were written. No v2 numbers exist yet.
+Both are covered by offline synthetic tests (`tests/`). Full numbers and robustness checks are in `RESULTS.md` (v2 section).
+
+**v2 results on real data** (235 clean mutations, 75 movers, 121 sites, 4 proteins; SNase has only one WT crystal and drops out):
+
+| model (logistic regression) | leave-site-out AUC | leave-protein-out AUC |
+|---|---|---|
+| site | 0.62 [0.53, 0.70] | 0.63 [0.53, 0.70] |
+| substitution | 0.53 [0.46, 0.60] | 0.54 [0.46, 0.61] |
+| site + substitution | 0.62 [0.53, 0.70] | 0.60 [0.50, 0.67] |
+
+* **Substitution identity adds nothing once the site is known.** Paired ΔAUC (site+subst − site) = +0.001 [−0.04, +0.05]. It stays within ±0.01 at every label definition we tried (z>2 or z>3, with or without σ shrinkage). This is the local-sequence question asked directly, with an engine that can see a Δ, and the answer is still no.
+* **Where the mutation sits carries a weak signal.** The main drivers are window B-factor, non-local contacts and WT bend. The signal is fragile, though. Without σ shrinkage, 6 extra movers appear and site AUC falls to 0.54 [0.45, 0.63]. At z>3 it is 0.73 with shrinkage but 0.59 without. B-factor correlates with the WT noise floor (Spearman ρ = 0.51), so part of the site signal may be noise-floor structure rather than real movement.
+* The gradient-boosting variants overfit at this sample size (site-only AUC 0.42, below chance). Their "significant" paired ΔAUC comes from that broken baseline, not from the substitution features.
 
 ---
 
