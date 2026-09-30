@@ -206,6 +206,19 @@ Within-protein site AUCs under the B-factor prior (z>2) are T4L 0.61, human lyso
 **Reading.**
 1. *Substitution identity adds nothing once the site is known.* ΔAUC is ≤ +0.01 with CIs spanning 0 under all eight label definitions. This is the local-sequence question asked with an engine that predicts Δ directly, so it closes the "the engine couldn't see it" loophole in Gates 2–5.
 2. *Site context carries a modest signal, and the B-factor confound does not explain it.* Conditioning the prior on B removes movers where B is high, yet site AUC rises slightly (0.62 → 0.64). One residual caveat: WT bend, the strongest feature, also correlates with raw σ (ρ = −0.44). Adding it as a second prior covariate lowers site AUC to 0.60 [0.50, 0.69] at z>2, with the CI touching chance, and to 0.68 [0.60, 0.76] at z>3. Straight windows are both noisier and more mutation-sensitive, and with 4 proteins these cannot be fully separated. **Do not read 0.60 as a lower bound on the site effect.** It corrects only for the two noise covariates we modelled (B-factor and WT bend). Any unmodelled covariate of WT noise that also correlates with the site features would lower it further. Treat it as the upper end of what survives correction so far. Raw σ without shrinkage gives the weakest signal, but it is also the noisiest label (few-crystal MADs), so it does not settle the question.
+*Is the WT-bend effect just secondary structure?* No (B-factor prior, z>2; scratch analysis). SS explains about half the variance of WT bend (η² = 0.49), but it does not predict movers:
+
+| check | result |
+|---|---|
+| mover rate by SS | H 0.30 (n = 141), E 0.35 (n = 34), L 0.33 (n = 60) |
+| SS-only model | AUC 0.35 [0.28, 0.44] (no signal; below 0.5 is a grouped-CV artifact) |
+| WT bend, residualised on SS | AUC 0.64 [0.54, 0.71] |
+| WT bend within helices only | AUC 0.61 [0.50, 0.70] |
+| ΔAUC, SS + WT bend − SS only | +0.26 [+0.11, +0.38] |
+| ΔAUC, site − (site without WT bend) | +0.10 [+0.03, +0.16] |
+
+The bend signal lives *within* SS classes, so it is not a proxy for SS. What remains open is whether within-class bend marks windows that are noisier in WT crystals or windows that really move on mutation.
+
 3. The honest v2 claim: **"where" weakly predicts movers (AUC ~0.60–0.70 depending on the label), "what" adds nothing.** More proteins with ≥3 WT crystals per form would be needed to separate flexibility-driven noise from flexibility-driven movement.
 
 ## Methodological notes worth highlighting
