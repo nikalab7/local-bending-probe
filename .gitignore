@@ -2,6 +2,7 @@
 t4l_pdb/
 cull_pdb/
 val_pdb/
+mined_pdb/
 
 # Python
 __pycache__/

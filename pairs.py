@@ -31,6 +31,7 @@ Window: the canonical 5-C-alpha window centred on the mutated residue
 (start s = r - 2), measured with bending_metric.bending_angle.
 """
 from __future__ import annotations
+import gzip
 import os
 from collections import Counter, defaultdict
 import numpy as np
@@ -47,6 +48,7 @@ Z_MOVER = 2.0
 LIG_CUTOFF = 8.0       # Angstrom, het atom to any window C-alpha
 LIG_TYPICAL = 0.5      # het present in >= this fraction of form-WT = "normal"
 MED_EFF = 1.2533       # sd(median) / sd(mean) for normal data
+NULL_HELDOUT = 10      # WT crystals per form held out as pseudo-mutants (null control)
 WATER = {"HOH", "DOD", "WAT", "H2O"}
 
 THREE2ONE = {
@@ -71,7 +73,8 @@ def parse_structure(path):
     out = dict(resolution=None, spacegroup=None, cell=None,
                helix=set(), sheet=set(), hets=[])
     best = {}
-    with open(path) as fh:
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as fh:
         for line in fh:
             rec = line[:6]
             if rec.startswith("ENDMDL"):
@@ -222,13 +225,75 @@ def near_hets(st, res, s):
     return frozenset(names)
 
 
+def form_stats(structs, wts, cons, prior):
+    """WT window statistics of one crystal form, with the sigma prior.
+
+    Returns dict(per={s: (median bend, raw sigma, n, WT window B z)}, pooled,
+    prior={s: prior sigma}, slope, wts) or None (too few WT crystals).
+    """
+    if len(wts) < MIN_WT:
+        return None
+    bz = [chain_bz(structs[p]["res"]) for p in wts]
+    per = {}
+    for s in range(min(cons), max(cons) - 3):
+        vals, bws = [], []
+        for p, z in zip(wts, bz):
+            v = window_bend(structs[p]["res"], s)
+            if v is not None:
+                vals.append(v)
+                zw = np.array([z[w] for w in range(s, s + 5)])
+                bws.append(float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
+                           else np.nan)
+        if len(vals) >= MIN_WT:
+            vals = np.array(vals)
+            med = float(np.median(vals))
+            bws = np.array(bws)
+            bw = float(np.median(bws[np.isfinite(bws)])) if np.isfinite(bws).any() else np.nan
+            per[s] = (med, float(1.4826 * np.median(np.abs(vals - med))), len(vals), bw)
+    pos = [v[1] for v in per.values() if v[1] > 0]
+    if not pos:
+        return None
+    pooled = float(np.median(pos))
+    keys = sorted(per)
+    if prior == "bfactor":
+        pr, slope = fit_sigma_prior([per[s][1] for s in keys], [per[s][3] for s in keys],
+                                    [per[s][2] for s in keys], pooled)
+    else:
+        pr, slope = np.full(len(keys), pooled), 0.0
+    return dict(per=per, pooled=pooled, wts=wts, slope=slope,
+                prior=dict(zip(keys, map(float, pr))))
+
+
+def typical_hets(structs, wts, s):
+    """Het names near window s that at least LIG_TYPICAL of the WT crystals carry."""
+    c = Counter()
+    for p in wts:
+        c.update(near_hets(structs[p], structs[p]["res"], s))
+    return {k for k, v in c.items() if v >= LIG_TYPICAL * len(wts)}
+
+
+def label(W, s, bends):
+    """(delta, se, z, sigma, sigma_prior) of mutant bends vs form stats W at window s."""
+    wt_med, sig_hat, n, _ = W["per"][s]
+    sig_prior = W["prior"][s]
+    sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * sig_prior ** 2) / (n + SHRINK_K)))
+    se = float(MED_EFF * sig * np.sqrt(1.0 / len(bends) + 1.0 / n))
+    delta = float(np.median(bends)) - wt_med
+    return delta, se, delta / se, sig, sig_prior
+
+
 # ------------------------------ pair builder --------------------------------
-def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
+def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
+                family=None, null_out=None):
     """Clean one-row-per-mutation labels for one protein.
 
     pdb_paths  : {pid: path}
     pick_chain : chains -> (chain_id, residues) or (None, None)
+               or a dict {pid: chain_id} (chains fixed in advance, e.g. by SIFTS)
     prior      : noise-floor prior, "bfactor" or "pooled" (see module doc)
+    family     : sequence-family label stored on every row (default: protein)
+    null_out   : if a list, WT-vs-WT pseudo-mutant rows are appended to it
+                 (see null_rows) -- the negative control for the site model
     Returns (rows, diag). Each row holds the label (delta, se, z, mover) plus
     what delta_model needs to featurise the site (scaffold residues etc.).
     """
@@ -240,8 +305,12 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
         except Exception:
             diag["unparseable"] += 1
             continue
-        ch, res = pick_chain({c: {r: (v[0], v[1]) for r, v in rs.items()}
-                              for c, rs in st["chains"].items()})
+        if isinstance(pick_chain, dict):
+            ch = pick_chain.get(pid)
+            ch = ch if ch in st["chains"] else None
+        else:
+            ch, _ = pick_chain({c: {r: (v[0], v[1]) for r, v in rs.items()}
+                                for c, rs in st["chains"].items()})
         if ch is None:
             diag["no_matching_chain"] += 1
             continue
@@ -284,38 +353,10 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
         raise ValueError(f"unknown prior {prior!r}")
     wt_stats = {}
     for f, wts in wt_by_form.items():
-        if len(wts) < MIN_WT:
-            continue
-        bz = [chain_bz(structs[p]["res"]) for p in wts]
-        per = {}
-        for s in range(min(cons), max(cons) - 3):
-            vals, bws = [], []
-            for p, z in zip(wts, bz):
-                v = window_bend(structs[p]["res"], s)
-                if v is not None:
-                    vals.append(v)
-                    zw = np.array([z[w] for w in range(s, s + 5)])
-                    bws.append(float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
-                               else np.nan)
-            if len(vals) >= MIN_WT:
-                vals = np.array(vals)
-                med = float(np.median(vals))
-                bws = np.array(bws)
-                bw = float(np.median(bws[np.isfinite(bws)])) if np.isfinite(bws).any() else np.nan
-                per[s] = (med, float(1.4826 * np.median(np.abs(vals - med))), len(vals), bw)
-        pos = [v[1] for v in per.values() if v[1] > 0]
-        if not pos:
-            continue
-        pooled = float(np.median(pos))
-        keys = sorted(per)
-        if prior == "bfactor":
-            pr, slope = fit_sigma_prior([per[s][1] for s in keys], [per[s][3] for s in keys],
-                                        [per[s][2] for s in keys], pooled)
-        else:
-            pr, slope = np.full(len(keys), pooled), 0.0
-        diag[f"prior_slope[{f}]"] = round(slope, 3)
-        wt_stats[f] = dict(per=per, pooled=pooled, wts=wts,
-                           prior=dict(zip(keys, map(float, pr))))
+        W = form_stats(structs, wts, cons, prior)
+        if W is not None:
+            diag[f"prior_slope[{f}]"] = round(W["slope"], 3)
+            wt_stats[f] = W
 
     # one candidate per (form, mutation); then keep the best-covered form
     cand = defaultdict(list)
@@ -331,10 +372,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
         W = wt_stats[f]
         wt_med, sig_hat, n, bw_wt = W["per"][s]
         # ligand state that is normal for this form at this window
-        wt_lig = Counter()
-        for p in W["wts"]:
-            wt_lig.update(near_hets(structs[p], structs[p]["res"], s))
-        typical = {k for k, c in wt_lig.items() if c >= LIG_TYPICAL * len(W["wts"])}
+        typical = typical_hets(structs, W["wts"], s)
         bends, used, lig_drop = [], [], 0
         for p in pids:
             if near_hets(structs[p], structs[p]["res"], s) != typical:
@@ -348,18 +386,15 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
             diag["variant_form_no_clean_crystal"] += 1
             continue
         m = len(bends)
-        sig_prior = W["prior"][s]
-        sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * sig_prior ** 2) / (n + SHRINK_K)))
-        se = MED_EFF * sig * np.sqrt(1.0 / m + 1.0 / n)
-        delta = float(np.median(bends)) - wt_med
+        delta, se, z, sig, sig_prior = label(W, s, bends)
         # best-resolution WT of this form that actually resolves the window
         scaffold = min((p for p in W["wts"] if window_bend(structs[p]["res"], s) is not None),
                        key=lambda p: (structs[p]["resolution"], -len(structs[p]["res"])))
         cand[mut].append(dict(
-            protein=protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
+            protein=protein, family=family or protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
             n_wt=n, n_mut=m, wt_bend=wt_med, sigma=sig, sigma_raw=sig_hat,
             sigma_prior=sig_prior, b_window_wt=bw_wt,
-            delta=delta, se=float(se), z=float(delta / se),
+            delta=delta, se=se, z=float(z),
             mover=bool(abs(delta) > Z_MOVER * se),
             res_mut=float(np.median([structs[p]["resolution"] for p in used])),
             pdbs=sorted(used), scaffold=scaffold,
@@ -370,14 +405,66 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
     rows.sort(key=lambda x: (x["r"], x["mut"]))
     diag["mutations"] = len(rows)
     diag["movers"] = sum(x["mover"] for x in rows)
+    if null_out is not None:
+        nr = null_rows(rows, structs, wt_by_form, cons, prior)
+        diag["null_pseudo_pairs"] = len(nr)
+        diag["null_pseudo_movers"] = sum(x["mover"] for x in nr)
+        null_out.extend(nr)
     return rows, dict(diag)
 
 
+def null_rows(rows, structs, wt_by_form, cons, prior):
+    """WT-vs-WT pseudo-mutants at the windows of the real rows.
+
+    For each form, up to NULL_HELDOUT WT crystals are held out one at a time;
+    the held-out crystal plays a single-crystal "mutant" against statistics
+    (median, sigma, prior) recomputed WITHOUT it, through the same label()
+    code. No mutation exists, so every pseudo-mover is noise. If site
+    features predict pseudo-movers, the site signal on real data can be
+    noise structure; if they do not, it cannot.
+    """
+    out, done, cache = [], set(), {}
+    for x in rows:
+        f, s = x["form"], x["s"]
+        wts = sorted(wt_by_form[f])
+        held = [p for p in sorted(wts, key=lambda p: (structs[p]["resolution"], p))][:NULL_HELDOUT]
+        for h in held:
+            if (f, s, h) in done:
+                continue
+            done.add((f, s, h))
+            rest = [p for p in wts if p != h]
+            if (f, h) not in cache:
+                cache[(f, h)] = form_stats(structs, rest, cons, prior)
+            W = cache[(f, h)]
+            if W is None or s not in W["per"]:
+                continue
+            if near_hets(structs[h], structs[h]["res"], s) != typical_hets(structs, rest, s):
+                continue
+            b = window_bend(structs[h]["res"], s)
+            if b is None:
+                continue
+            delta, se, z, sig, sig_prior = label(W, s, [b])
+            out.append({**x, "n_wt": W["per"][s][2], "n_mut": 1, "delta": delta,
+                        "se": se, "z": float(z), "sigma": sig, "sigma_prior": sig_prior,
+                        "mover": bool(abs(z) > Z_MOVER), "pdbs": [h], "heldout": h})
+    return out
+
+
 # --------------------------------- CLI --------------------------------------
-def load_proteins(prior=PRIOR):
-    """Clean pairs for T4L + the Gate 4 proteins, from the gate caches."""
+def load_proteins(prior=PRIOR, null_out=None, mined=True):
+    """Clean pairs for T4L + the Gate 4 proteins (gate caches) and, if
+    mine_pairs.py has been run, every mined protein (manifests/mined.json).
+
+    Returns {protein: (rows, diag)}. Rows carry a sequence-family label
+    (>= 30% identity clusters from the miner; the protein name without it).
+    """
     from feasibility_t4l import PDB_DIR, pick_t4l_chain
     from stats_utils import pinned_ids
+    man = None
+    if mined:
+        from mine_pairs import load_manifest, MINED_DIR
+        man = load_manifest()
+    fam = {v["name"]: v["family"] for v in man["covered"].values()} if man else {}
 
     def t4l_pick(chains):
         best, sc = (None, None), 1e9
@@ -390,18 +477,26 @@ def load_proteins(prior=PRIOR):
     t4l = {f[:-4]: os.path.join(PDB_DIR, f) for f in os.listdir(PDB_DIR)
            if f.endswith(".pdb")} if os.path.isdir(PDB_DIR) else {}
     if t4l:
-        out["T4L"] = build_pairs(t4l, t4l_pick, "T4L", min_cons=10, prior=prior)
+        out["T4L"] = build_pairs(t4l, t4l_pick, "T4L", min_cons=10, prior=prior,
+                                 family=fam.get("T4L"), null_out=null_out)
     try:
         from powered_loop_gate import PROTEINS, VAL_DIR, pick_chain, fetch_ids, MAX_PER
     except Exception:
-        return out
+        PROTEINS = []
     for up, name, hint in PROTEINS:
         ids = pinned_ids(f"val_{up}_{name}", lambda: fetch_ids(up))[:MAX_PER]
         paths = {p: os.path.join(VAL_DIR, f"{p}.pdb") for p in ids
                  if os.path.exists(os.path.join(VAL_DIR, f"{p}.pdb"))}
         if paths:
             out[name] = build_pairs(paths, lambda c, h=hint: pick_chain(c, h), name,
-                                    prior=prior)
+                                    prior=prior, family=fam.get(name), null_out=null_out)
+    for acc, v in sorted((man or {}).get("proteins", {}).items()):
+        paths = {p: os.path.join(MINED_DIR, f"{p}.pdb.gz") for p in v["entries"]}
+        paths = {p: f for p, f in paths.items() if os.path.exists(f)}
+        if paths:
+            out[acc] = build_pairs(paths, {p: e["chain"] for p, e in v["entries"].items()},
+                                   acc, min_cons=3, prior=prior, family=v["family"],
+                                   null_out=null_out)
     return out
 
 
@@ -416,7 +511,7 @@ def main():
     if not data:
         print("no cached PDB files -- run feasibility_t4l.py / powered_loop_gate.py first")
         return
-    fields = ["protein", "r", "wt", "mut", "form", "n_wt", "n_mut", "wt_bend",
+    fields = ["protein", "family", "r", "wt", "mut", "form", "n_wt", "n_mut", "wt_bend",
               "sigma_raw", "sigma_prior", "b_window_wt", "sigma", "delta", "se", "z", "mover", "res_mut",
               "scaffold_ss", "scaffold", "pdbs"]
     with open("pairs_clean.csv", "w", newline="") as fh:

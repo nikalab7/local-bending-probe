@@ -214,6 +214,65 @@ def test_bfactor_prior_tracks_flexible_region():
     assert bf[48]["b_window_wt"] > bf[20]["b_window_wt"]
 
 
+def test_null_control_rows():
+    """WT-vs-WT pseudo-mutants: held-out crystal excluded from its own floor,
+    and (no mutation exists) few pseudo-movers."""
+    d = tempfile.mkdtemp(); paths = make_dataset(d)
+    null = []
+    rows, diag = pairs.build_pairs(paths, lambda c: ("A", c["A"]), "synthetic",
+                                   min_cons=5, null_out=null)
+    assert null and diag["null_pseudo_pairs"] == len(null)
+    real = {(x["form"], x["s"]): x for x in rows}
+    for x in null:
+        assert x["heldout"] not in real[(x["form"], x["s"])]["pdbs"]
+        assert x["n_wt"] == real[(x["form"], x["s"])]["n_wt"] - 1
+        assert x["n_mut"] == 1
+    assert np.mean([x["mover"] for x in null]) < 0.2
+    assert len({(x["form"], x["s"], x["heldout"]) for x in null}) == len(null)
+
+
+def test_chain_dict_and_gzip():
+    import gzip
+    import shutil
+    d = tempfile.mkdtemp(); paths = make_dataset(d)
+    gz = {}
+    for pid, p in paths.items():
+        with open(p, "rb") as a, gzip.open(p + ".gz", "wb") as b:
+            shutil.copyfileobj(a, b)
+        gz[pid] = p + ".gz"
+    rows_a, _ = pairs.build_pairs(paths, lambda c: ("A", c["A"]), "synthetic", min_cons=5)
+    rows_b, diag = pairs.build_pairs(gz, {p: "A" for p in gz}, "synthetic", min_cons=5,
+                                     family="FAM")
+    assert [(x["r"], x["mut"], round(x["z"], 9)) for x in rows_a] == \
+        [(x["r"], x["mut"], round(x["z"], 9)) for x in rows_b]
+    assert all(x["family"] == "FAM" for x in rows_b)
+    _, diag = pairs.build_pairs(gz, {p: "Z" for p in gz}, "synthetic", min_cons=5)
+    assert diag["no_matching_chain"] == len(gz)
+
+
+def test_prescreen_picks_usable_forms():
+    import mine_pairs
+    ref = "".join(np.random.default_rng(2).choice(list("ACDEFHIKLMNQRST"), 120))   # no G/P/W/Y
+    mut = lambda i, a: ref[:i] + a + ref[i + 1:]
+    k = iter(range(1000))
+
+    def rec(seq, form="A", nent=1, res=1.8):
+        sg, cell = FORMS[form]
+        return dict(entity=f"X{next(k):03d}_1", pdb=f"X{next(k):03d}", chain="A", seq=seq,
+                    resolution=res, n_protein_entities=nent, spacegroup=sg, cell=cell,
+                    description="demo")
+    recs = [rec(ref) for _ in range(4)]                          # form A: 4 WT
+    recs += [rec(mut(10, "W")), rec(mut(20, "P")), rec(mut(30, "G"), nent=2)]
+    recs += [rec(ref, "B") for _ in range(2)] + [rec(mut(40, "W"), "B")]  # B: 2 WT only
+    recs += [rec(mut(50, "W")[:-1] + "Y")]                        # double mutant
+    ps = mine_pairs.prescreen(recs)
+    assert ps["reference"] == ref and list(ps["forms"]) == ["P 21 21 21#0"]
+    f = ps["forms"]["P 21 21 21#0"]
+    assert len(f["wt"]) == 4 and len(f["single"]) == 2          # complex + double out
+    assert mine_pairs.hamming1("ABC", "ABD") == 2 and mine_pairs.hamming1("ABC", "AXD") is None
+    assert mine_pairs.prescreen([rec(ref) for _ in range(5)]) is None   # no mutant
+
+
 def test_form_matching_matters():
     """Sanity: against form-A WT the form-B mutant WOULD look like a mover."""
     rows, _ = build()
