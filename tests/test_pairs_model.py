@@ -170,6 +170,50 @@ def test_scaffold_resolves_window():
     delta_model.featurize([x])
 
 
+def test_sigma_prior_fit():
+    rng = np.random.default_rng(1)
+    bw = rng.normal(size=200)
+    sig = np.exp(0.0 + 0.5 * bw + 0.2 * rng.normal(size=200))
+    pr, slope = pairs.fit_sigma_prior(sig, bw, np.full(200, 8), pooled=1.0)
+    assert abs(slope - 0.5) < 0.1
+    assert pr[np.argmax(bw)] > pr[np.argmin(bw)]
+    # no B variation (or too few windows) -> constant pooled prior
+    pr, slope = pairs.fit_sigma_prior(sig, np.zeros(200), np.full(200, 8), pooled=1.3)
+    assert slope == 0.0 and np.all(pr == 1.3)
+    pr, slope = pairs.fit_sigma_prior(sig[:5], bw[:5], np.full(5, 8), pooled=1.3)
+    assert slope == 0.0 and np.all(pr == 1.3)
+
+
+def test_bfactor_prior_tracks_flexible_region():
+    """WT crystals noisier where B is high -> the prior is larger there, and a
+    null mutant in the flexible region is less likely to look like a mover."""
+    d = tempfile.mkdtemp(); rng = np.random.default_rng(5)
+    base = ideal_helix()
+    bfac = np.where((np.arange(1, N_RES + 1) >= 40) & (np.arange(1, N_RES + 1) <= 55), 60.0, 15.0)
+    noise = np.where(bfac > 30, 0.25, 0.03)[:, None]
+    paths = {}
+    for k in range(6):
+        ca = base + rng.normal(0, 1, base.shape) * noise
+        p = os.path.join(d, f"W{k}.pdb"); write_pdb(p, SEQ, ca, "A", 1.8, bfac=bfac)
+        paths[f"W{k}"] = p
+    for r in (20, 48):
+        aa = "W" if SEQ[r - 1] != "W" else "Y"
+        ca = base + rng.normal(0, 1, base.shape) * noise
+        p = os.path.join(d, f"M{r}.pdb")
+        write_pdb(p, SEQ[:r - 1] + aa + SEQ[r:], ca, "A", 1.8, bfac=bfac)
+        paths[f"M{r}"] = p
+    out = {}
+    for prior in ("bfactor", "pooled"):
+        rows, diag = pairs.build_pairs(paths, lambda c: ("A", c["A"]), "synthetic",
+                                       min_cons=5, prior=prior)
+        out[prior] = {x["r"]: x for x in rows}
+    bf, po = out["bfactor"], out["pooled"]
+    assert bf[48]["sigma_prior"] > 2 * bf[20]["sigma_prior"]
+    assert po[48]["sigma_prior"] == po[20]["sigma_prior"]
+    assert abs(bf[48]["z"]) < abs(po[48]["z"])            # flexible: less inflated z
+    assert bf[48]["b_window_wt"] > bf[20]["b_window_wt"]
+
+
 def test_form_matching_matters():
     """Sanity: against form-A WT the form-B mutant WOULD look like a mover."""
     rows, _ = build()
