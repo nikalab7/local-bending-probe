@@ -221,6 +221,58 @@ The bend signal lives *within* SS classes, so it is not a proxy for SS. What rem
 
 3. The honest v2 claim: **"where" weakly predicts movers (AUC ~0.60–0.70 depending on the label), "what" adds nothing.** More proteins with ≥3 WT crystals per form would be needed to separate flexibility-driven noise from flexibility-driven movement.
 
+## v3 — systematic miner (`mine_pairs.py`): 191 proteins, 158 families
+
+**Why.** v2 had 4 usable proteins. That was too few to tell apart two explanations of the site signal: windows that are noisy in WT, or windows that really move on mutation. SPEC §2.1's primary source (RCSB + SIFTS) removes that limit.
+
+**How.**
+- *Candidates:* an RCSB facet finds 588 UniProt accessions with ≥ 8 X-ray (≤ 2.5 Å) entities carrying exactly one SIFTS substitution.
+- *Pre-screen (metadata only):* keep crystal forms with ≥ 3 WT crystals of one reference construct plus ≥ 1 single mutant, in single-protein-entity entries only. 283 accessions pass. 278 are new; the other 5 are the gate proteins.
+- *Download:* 6120 of 6449 entries have PDB-format files.
+- *Families:* RCSB sequence search at ≥ 30% identity. A hit links two proteins only if its sequence *is* the other protein's reference construct. Linking through UniProt annotations merged 86 unrelated proteins through fusion constructs (T4L–GPCR, MBP-, GST-, ubiquitin-tagged).
+
+Everything is pinned in `manifests/mined.json`. `pairs.py` applies the same filters as in v2 (B-factor prior, z>2):
+
+| structures | dropped: resolution | dropped: ligand mismatch (mutant crystals) | variant-forms with no clean crystal / no WT floor | clean mutations | movers | proteins | families |
+|---|---|---|---|---|---|---|---|
+| 7612 | 45 | 1243 | 636 / 274 | 892 | 335 (37.6%) | 191 | 158 |
+
+**Delta model** (90% residue-cluster bootstrap CIs; family-out = 10 folds of whole ≥ 30%-identity families):
+
+| features | model | leave-site-out AUC | leave-family-out AUC |
+|---|---|---|---|
+| SS only | logreg | 0.473 [0.43, 0.51] | 0.509 [0.47, 0.55] |
+| site | logreg | 0.587 [0.55, 0.62] | 0.595 [0.56, 0.63] |
+| subst | logreg | 0.564 [0.53, 0.60] | 0.541 [0.50, 0.58] |
+| site+subst | logreg | 0.604 [0.57, 0.64] | 0.593 [0.56, 0.63] |
+| site | hgb | 0.551 [0.51, 0.59] | 0.546 [0.51, 0.58] |
+| site+subst | hgb | 0.559 [0.52, 0.59] | 0.567 [0.53, 0.60] |
+
+| paired contrast (logreg) | leave-site-out | leave-family-out |
+|---|---|---|
+| site − SS | +0.114 [+0.07, +0.16] | +0.085 [+0.05, +0.12] |
+| site+subst − site | +0.017 [−0.01, +0.04] | −0.002 [−0.03, +0.02] |
+
+**Null control** (`pairs.null_rows`). Up to 10 WT crystals per form are held out one at a time. Each is scored as a single-crystal "mutant" against statistics recomputed without it, through the same `label()` code. This gives 2699 pseudo-pairs at 456 sites.
+- *z calibration:* 6.9% of pseudo-pairs exceed |z| > 2 (nominal ≈ 4.6%), against 37.6% of real mutations. The z threshold is close to calibrated, and mutation-induced movement is real in aggregate.
+- *Where the noise is:* site features partly predict *where* noise exceedances happen. The site model trained on pseudo labels reaches AUC 0.564 [0.52, 0.61] (site-out) and 0.560 [0.51, 0.61] (family-out).
+
+**Decomposition** (scratch analysis, 5 site folds shared between real and null rows):
+
+| score, evaluated on real labels | AUC |
+|---|---|
+| noise score (site model trained on null labels, other sites) | 0.555 [0.52, 0.59] |
+| site model trained on real labels | 0.593 [0.56, 0.63] |
+| ΔAUC, (noise score + site features) − noise score | +0.047 [+0.01, +0.08], P(Δ ≤ 0) = 0.02 |
+| real-trained site model scored on *null* labels | 0.530 [0.49, 0.57] |
+
+The coefficients differ between the two fits. Non-local contacts carry movement: +0.21 on real labels, −0.14 on null. Window B-factor also flips sign: +0.14 real, −0.12 null. WT bend is negative in both (−0.44 real, −0.24 null), so it is partly a noise marker.
+
+**Reading.**
+1. *"What" has no edge.* With 892 mutations and 158 families, substitution identity adds −0.002 [−0.03, +0.02] over the site. This is the project's central question, now answered at 4× the v2 sample and with family hold-out.
+2. *"Where" has a small, real edge.* Site features beat SS by +0.085 (family-out), and SS alone is at chance. A noise-only score reaches AUC 0.555 on real labels, which is more than half of the site model's margin above chance (0.593). The movement-specific remainder is ΔAUC ≈ +0.05 [+0.01, +0.08], carried mainly by non-local contacts, consistent with the tertiary-packing reading of Gate 5.
+3. Neither is a usable predictor: the best AUC is ≈ 0.60. The v2 single-series numbers (0.64, or 0.60 after WT-bend correction) were within noise of this pooled estimate.
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°
@@ -264,3 +316,8 @@ The bend signal lives *within* SS classes, so it is not a proxy for SS. What rem
 > AUC 0.64 [0.55, 0.72] with a B-factor-conditioned noise floor. That signal survives
 > removing the B-factor confound, but only barely clears chance once WT bend also
 > enters the prior (0.60 [0.50, 0.69]).
+>
+> **v3 update (191 proteins, 158 families, WT-vs-WT null control):** "what" adds
+> nothing (−0.002 [−0.03, +0.02]). "Where" predicts movers at AUC 0.60 [0.56, 0.63]
+> (family hold-out), beyond SS. More than half of that margin is WT-noise structure; the
+> movement-specific part is ΔAUC ≈ +0.05 [+0.01, +0.08], driven by non-local contacts.
