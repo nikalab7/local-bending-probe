@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 
 # Keep the figures (*.png) and the .md docs — they belong in the portfolio.
+
+# test cache
+.pytest_cache/

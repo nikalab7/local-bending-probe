@@ -161,11 +161,32 @@ python loop_gate.py               # Gate 3
 python powered_loop_gate.py       # Gate 4  (downloads validation proteins)
 python gate3_3d.py                # Gate 5
 python summary_figure.py
+
+# v2: clean labels + delta-targeted model (reuses the caches above)
+python pairs.py                   # -> pairs_clean.csv + per-protein filter diagnostics
+python delta_model.py             # -> results/delta_model.json, delta_model.png
+python delta_model.py --z 3       # sensitivity: stricter mover threshold
+
+python -m pytest tests/           # offline synthetic tests (no network)
 ```
 
 The scripts must run in this order: later gates reuse the PDB caches (`t4l_pdb/`, `cull_pdb/`, `val_pdb/`) that earlier gates download. On the first run, every RCSB search result is pinned to `manifests/*.json` (see `stats_utils.pinned_ids`). Commit those files so that later runs use the same entries, since live searches drift as the PDB grows. To refresh against today's PDB on purpose, delete a manifest.
 
 > **Status of the numbers.** The figures in this README and in `RESULTS.md` come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic.
+
+---
+
+## v2: clean labels and a delta-targeted model (not yet run on real data)
+
+An audit of the Gate 1–5 pipeline found problems that bear on the headline conclusion:
+
+* **Labels.** One T4L variant (L99A, around 60 ligand-soak crystals) made up 25% of the validation rows. Mutants were compared to WT crystals of any crystal form. Resolution and ligands were never checked. The mover threshold came from raw per-window MADs of as few as 3 crystals.
+* **Engine.** Gate 2 regressed *absolute* bending (RMSE ~30°) and differenced two predictions to find changes with a median of ~2.7°. A tree ensemble returns exactly 0 unless a split touches the mutated position. The engine could not see the effect even if the information were there, so Gates 2–5 do not show that local sequence *lacks* the information.
+* **Features.** In the existing T4L labels, site identity explains ~60% of |Δ| variance. A same-site diagnostic (not a valid predictor) reaches AUC 0.60, against 0.52 for the model. Where a mutation sits matters more than what it is, and the model had no site features.
+
+`pairs.py` rebuilds the labels per SPEC §2.2–2.4. It applies a resolution cut (≤2.5 Å), compares each mutant only with WT crystals of the same crystal form, drops mutant crystals whose ligands near the window differ from the form's WT, and aggregates to one row per mutation. The noise floor is shrunk toward the pooled value, and the mover threshold is a z-test on the median difference. `delta_model.py` then predicts movers directly from **site** features (SS, B-factor, burial, contacts, WT bend) and **substitution** features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial). It uses leave-site-out and leave-protein-out CV. The decisive test is the paired ΔAUC of *site+substitution* over *site*: does the substitution identity add anything once the site is known?
+
+Both are covered by offline synthetic tests (`tests/`). They have **not** been run on the real PDB caches, because RCSB was unreachable from the environment where they were written. No v2 numbers exist yet.
 
 ---
 

@@ -25,6 +25,19 @@ MANIFEST_DIR = "manifests"
 
 
 # ------------------------------ bootstrap -----------------------------------
+def fast_auc(y, score):
+    """ROC-AUC via the Mann-Whitney rank sum (ties averaged).
+
+    Same value as sklearn's ROC-AUC for binary labels, much faster, which
+    matters inside 3000-resample bootstraps.
+    """
+    from scipy.stats import rankdata
+    y = np.asarray(y, bool)
+    npos = int(y.sum()); nneg = len(y) - npos
+    r = rankdata(score)
+    return float((r[y].sum() - npos * (npos + 1) / 2) / (npos * nneg))
+
+
 def _cluster_index(clusters):
     """Map cluster labels -> list of row-index arrays."""
     clusters = np.asarray([str(c) for c in clusters])
@@ -43,15 +56,14 @@ def _resamples(clusters, n_boot, seed):
 
 def cluster_auc_ci(y, score, clusters, n_boot=N_BOOT, seed=0, level=0.90):
     """ROC-AUC + cluster-bootstrap CI. Returns (auc, lo, hi, n_clusters)."""
-    from sklearn.metrics import roc_auc_score
     y = np.asarray(y, bool); score = np.asarray(score, float)
     if not (0 < y.sum() < len(y)):
         return float("nan"), float("nan"), float("nan"), 0
-    auc = roc_auc_score(y, score)
+    auc = fast_auc(y, score)
     b = []
     for bi in _resamples(clusters, n_boot, seed):
         if 0 < y[bi].sum() < len(bi):
-            b.append(roc_auc_score(y[bi], score[bi]))
+            b.append(fast_auc(y[bi], score[bi]))
     a = (1 - level) / 2 * 100
     lo, hi = np.percentile(b, [a, 100 - a])
     return float(auc), float(lo), float(hi), len(_cluster_index(clusters))
@@ -64,16 +76,15 @@ def paired_delta_auc(y, score_a, score_b, clusters, n_boot=N_BOOT, seed=0,
     Returns (delta, lo, hi, p_one_sided) where p is the bootstrap fraction of
     resamples with delta <= 0 (i.e. evidence that b is NOT better than a).
     """
-    from sklearn.metrics import roc_auc_score
     y = np.asarray(y, bool)
     sa = np.asarray(score_a, float); sb = np.asarray(score_b, float)
     if not (0 < y.sum() < len(y)):
         return float("nan"), float("nan"), float("nan"), float("nan")
-    delta = roc_auc_score(y, sb) - roc_auc_score(y, sa)
+    delta = fast_auc(y, sb) - fast_auc(y, sa)
     d = []
     for bi in _resamples(clusters, n_boot, seed):
         if 0 < y[bi].sum() < len(bi):
-            d.append(roc_auc_score(y[bi], sb[bi]) - roc_auc_score(y[bi], sa[bi]))
+            d.append(fast_auc(y[bi], sb[bi]) - fast_auc(y[bi], sa[bi]))
     d = np.array(d)
     a = (1 - level) / 2 * 100
     lo, hi = np.percentile(d, [a, 100 - a])

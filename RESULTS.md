@@ -148,6 +148,17 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 
 ---
 
+## v2 — clean labels + delta model (`pairs.py`, `delta_model.py`) — NOT YET RUN
+
+**Why.** Three problems found in the Gate 1–5 pipeline:
+1. *Label construction.* There was no per-variant aggregation: T4L site 99 (L99A ligand soaks) supplied 61/248 rows, 4 of them movers, and dropping it raises the mover rate from 29% to 36%. There was no crystal-form matching, no resolution cut on the validation proteins and no ligand check (SPEC §2.3–2.4 were not implemented). The floor came from raw MADs of as few as 3 WT crystals, and the threshold ignored the mutant side's own noise. The label is fragile: 72 movers at 2σ, 41 at 3σ, 30 at |Δ|>3°.
+2. *Engine.* Predict-absolute-then-difference has ~30° resolution against a ~2.7° effect, so its null says little about local sequence.
+3. *Missing features.* On `feasibility_t4l.csv`, site identity has η² = 0.60 for |Δ| (≈0.28 expected by chance with 69 sites). A leave-one-out same-site diagnostic gets AUC 0.60, against the model's 0.52.
+
+**What v2 does.** It keeps a mutant only when both sides are ≤2.5 Å. It uses a same-crystal-form WT reference and excludes mutant crystals whose ligand state near the window differs from the form's WT. It aggregates to one row per mutation. The floor is σ shrunk toward the pooled value (k = 4), with SE = 1.2533·σ·√(1/m + 1/n), and mover := |Δ|/SE > 2. The model is logistic regression or shallow gradient boosting on site and substitution features. Evaluation is leave-site-out (5-fold × 5 repeats) and leave-protein-out, with residue-cluster bootstrap CIs and a paired ΔAUC of site+subst over site.
+
+**Status.** Unit and synthetic end-to-end tests pass (`python -m pytest tests/`). They cover the parser against `parse_ca`, form matching, ligand exclusion, aggregation, the resolution cut, AUC equivalence, a planted-signal recovery and a null check. The code has not yet been run on real data.
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°
