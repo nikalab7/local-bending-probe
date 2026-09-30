@@ -1,5 +1,11 @@
 # proteinX — Bending Metric & WT/Mutant Pair Benchmark (spec v1)
 
+> **Historical note.** This is the project's *original* spec, written when the plan was a
+> local-sequence predictor ("proteinX") to beat AlphaFold on point-mutation geometry.
+> The gates in `RESULTS.md` falsified that plan, and the repository now presents the
+> negative result (see `README.md`). The bending metric and pair-mining rules below
+> are still what the code implements.
+
 Gating artifact for the "win where AlphaFold is weak" plan. Until this exists and
 is consistent, the headline comparison (proteinX vs AF2 on real mutation-induced
 geometry change) is undefined.

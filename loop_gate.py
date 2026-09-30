@@ -22,6 +22,7 @@ import os
 import numpy as np
 from collections import Counter, defaultdict
 from scipy.stats import fisher_exact
+from stats_utils import cluster_auc_ci
 from bending_metric import bending_angle, is_continuous
 from feasibility_t4l import parse_ca, window_bend, PDB_DIR
 from gate2_model_feasibility import entry_features, outcome_onehot, TRAIN_DIR
@@ -256,15 +257,12 @@ def main():
         ap = average_precision_score(mov, dpred)
         k = movers_n
         patk = mov[np.argsort(-dpred)[:k]].mean() if k else float("nan")
-        # bootstrap CI on AUC -- n is tiny, so quantify how shaky 0.70 is
-        rng = np.random.default_rng(0); idx = np.arange(len(val)); boots = []
-        for _ in range(3000):
-            bi = rng.choice(idx, len(idx), replace=True)
-            if 0 < mov[bi].sum() < len(bi):
-                boots.append(roc_auc_score(mov[bi], dpred[bi]))
-        lo, hi = np.percentile(boots, [5, 95])
+        # bootstrap CI on AUC -- n is tiny, so quantify how shaky 0.70 is.
+        # Resample whole residues: several mutations share a site.
+        _, lo, hi, ncl = cluster_auc_ci(mov, dpred, [x["r"] for x in val])
         print(f"    held-out T4L loop pairs = {len(val)} (movers {movers_n}, base {base:.0%})")
-        print(f"    loop-only mover retrieval:  AUC={auc:.3f}  90% CI [{lo:.2f}, {hi:.2f}]  (core was 0.52)")
+        print(f"    loop-only mover retrieval:  AUC={auc:.3f}  90% CI [{lo:.2f}, {hi:.2f}] "
+              f"({ncl} residue clusters; core was 0.52)")
         print(f"                                AP ={ap:.3f}  (base {base:.3f})")
         print(f"                                p@{k}={patk:.3f}")
 

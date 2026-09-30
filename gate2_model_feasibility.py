@@ -21,6 +21,7 @@ Training set: RCSB X-ray <=2.0A, deduplicated at 30% sequence identity
 import json, os, urllib.request, concurrent.futures as cf
 import numpy as np
 from bending_metric import bending_angle, is_continuous
+from stats_utils import pinned_ids, cluster_auc_ci
 from feasibility_t4l import parse_ca, pick_t4l_chain, window_bend, THREE2ONE, PDB_DIR
 
 TRAIN_DIR = "cull_pdb"; os.makedirs(TRAIN_DIR, exist_ok=True)
@@ -192,7 +193,7 @@ def build_t4l_validation():
 # --------------------------------- main ------------------------------------
 def main():
     print("assembling 30%-culled X-ray<=2.0A training set ...")
-    ids = fetch_cull_ids()
+    ids = pinned_ids("cull_xray2A_id30", fetch_cull_ids)
     t4l = set(f[:-4].upper() for f in os.listdir(PDB_DIR) if f.endswith(".pdb"))
     ids = [i for i in ids if i.upper() not in t4l]
     print(f"  {len(ids)} non-redundant representatives")
@@ -253,6 +254,8 @@ def main():
     base = movers.mean()
 
     auc = roc_auc_score(movers, np.abs(dpred))
+    # CI resamples whole RESIDUES: mutations at the same site are correlated
+    _, lo, hi, ncl = cluster_auc_ci(movers, np.abs(dpred), [v["r"] for v in val])
     ap = average_precision_score(movers, np.abs(dpred))
     k = int(movers.sum())
     topk = np.argsort(-np.abs(dpred))[:k]
@@ -262,7 +265,8 @@ def main():
 
     print(f"\nheld-out T4L pairs: {len(val)}  (movers = {k}, base rate {base:.0%})")
     print(f"[CORRECTED gate] full-set mover retrieval by predicted |delta|:")
-    print(f"    ROC-AUC            = {auc:.3f}   (predict-zero = 0.500)")
+    print(f"    ROC-AUC            = {auc:.3f}   90% CI [{lo:.2f}, {hi:.2f}] "
+          f"(cluster bootstrap, {ncl} residues; predict-zero = 0.500)")
     print(f"    average precision  = {ap:.3f}   (predict-zero = base {base:.3f})")
     print(f"    precision@{k:<3d}       = {patk:.3f}")
     print(f"    Spearman(pred,obs) = {rho_s:.3f}   (signed-direction skill)")
