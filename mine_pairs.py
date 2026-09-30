@@ -233,18 +233,17 @@ def families(ref_seqs, workers):
 
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         hit = dict(ex.map(hits, ref_seqs))
-    # map hit entities to accessions. Chimeric entities (e.g. T4L-GPCR
-    # fusions) map to several UniProt accessions and would chain unrelated
-    # families together, so only single-accession entities link.
+    # A hit links a -> b only if its sequence IS b's reference construct.
+    # Mapping hits through their UniProt annotation is not safe: fusion
+    # constructs (T4L-GPCR, MBP-, GST-, ubiquitin-tagged) carry one partner's
+    # accession and chain unrelated families together.
     all_ids = sorted({i for v in hit.values() for i in v})
+    acc_by_seq = {s: a for a, s in ref_seqs.items()}
     acc_of = {}
     for m in entity_meta(all_ids):
-        accs = {r["database_accession"] for r in
-                (m["rcsb_polymer_entity_container_identifiers"]
-                 ["reference_sequence_identifiers"] or [])
-                if r["database_name"] == "UniProt"}
-        if len(accs) == 1 and next(iter(accs)) in parent:
-            acc_of[m["rcsb_id"]] = next(iter(accs))
+        b = acc_by_seq.get((m.get("entity_poly") or {}).get("pdbx_seq_one_letter_code_can"))
+        if b is not None:
+            acc_of[m["rcsb_id"]] = b
     for a, ids in hit.items():
         for i in ids:
             b = acc_of.get(i)
@@ -308,7 +307,8 @@ def build_manifest(min_single, workers):
     fam = families(ref, workers)
 
     out = dict(min_single=min_single, family_identity=FAMILY_IDENTITY,
-               covered={a: dict(name=n, family=fam.get(a, a)) for a, n in COVERED.items()},
+               covered={a: dict(name=n, family=fam.get(a, a), reference=ref.get(a))
+                        for a, n in COVERED.items()},
                proteins={})
     for acc, p in sorted(proteins.items()):
         if acc in COVERED:
