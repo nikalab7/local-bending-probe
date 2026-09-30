@@ -12,7 +12,7 @@ To answer that, I built a lightweight, interpretable pipeline designed around a 
 
 The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
 
-Local sequence contains enough information to explain some aspects of absolute backbone geometry, but at the sample sizes available here it showed no detectable information about which mutations will change that geometry.
+On 892 clean WT/mutant pairs from 191 proteins, the identity of the substitution adds nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a small signal, and its movement-specific part comes mainly from non-local contacts.
 
 The failure of the local model became the result.
 
@@ -33,7 +33,7 @@ A protein's backbone can bend for many reasons:
 
 The goal of this project was to isolate the first factor.
 
-Given two protein segments with similar local geometry, can local sequence alone predict which one bends more?
+For a given mutation, two things can be known: **what** it is (the substitution, i.e. the local-sequence change) and **where** it is (the site's structural context). Can "what" predict whether the backbone moves once "where" is known?
 
 If the answer were yes, it would suggest that interpretable local rules explain a meaningful fraction of backbone deformation.
 
@@ -49,13 +49,16 @@ The workflow was:
 
 1. Build a robust bending metric.
 2. Verify that mutation-induced bending exists in real structures.
-3. Train a local-sequence model.
-4. Test whether prediction survives strict validation.
-5. Add structural context and measure what changes.
+3. Build clean WT/mutant labels: same crystal form, ≤ 2.5 Å, matched ligand state, one row per mutation, and a noise floor that depends on flexibility.
+4. Mine the PDB systematically for every protein that can supply such pairs.
+5. Predict movers directly from site and substitution features, holding out whole sequence families.
+6. Run a null control on WT-vs-WT pseudo-mutants to separate real movement from noise.
 
 Every stage had a predefined failure condition.
 
 The objective was not to maximize performance but to determine where the predictive information actually resides.
+
+The first version of the pipeline (Gates 1–5, T4 lysozyme plus four validation proteins) is kept for the record. An audit showed its labels and its prediction engine were too weak to support a negative conclusion. The results below come from the rebuilt pipeline (v2/v3; details further down and in `RESULTS.md`).
 
 ---
 
@@ -63,17 +66,9 @@ The objective was not to maximize performance but to determine where the predict
 
 The phenomenon itself is real.
 
-In T4 lysozyme, 29% of single mutations (72/248) produced backbone changes larger than twice the measured per-window noise floor (a threshold that pure noise would cross roughly 5% of the time).
+Across 191 proteins, 37.6% of clean single mutations (335/892) moved the backbone beyond |z| > 2 of the per-window noise floor. When held-out WT crystals are scored the same way as pseudo-mutants, only 6.9% cross that threshold. Mutations do move protein backbones.
 
-Mutations do move protein backbones. The 29% is best read as a ceiling rather than a typical rate: T4 lysozyme is unusually mutation-tolerant, its mutagenesis is core-biased, and noise floors estimated from sparsely sampled windows inflate the above-floor fraction.
-
-The project also confirmed a well-known structural principle:
-
-> Backbone changes are more common in flexible regions.
-
-In T4 lysozyme, mutations in loops were more often movers than mutations in helices (48% of loop mutations were movers vs 25% in helices; OR 2.50 for loop vs all non-loop, one-sided Fisher p = 0.041).
-
-The noise floor was confirmed by two independent estimates (0.98° and 0.75°). The loop enrichment is a single-protein result at p = 0.041 and has not been replicated on other proteins.
+The first T4 lysozyme run found 29% (72/248). That run also reported more movers in loops than in helices (48% vs 25%, one-sided Fisher p = 0.041). **That enrichment does not replicate on the clean pooled labels:** loops 37.3% (107/287), all other residues 37.7% (228/605), p = 0.97. A secondary-structure-only model is at chance (AUC 0.51 [0.47, 0.55]).
 
 ---
 
@@ -81,30 +76,26 @@ The noise floor was confirmed by two independent estimates (0.98° and 0.75°). 
 
 The central hypothesis did not survive.
 
-Models using only local sequence information performed only slightly above chance:
+Substitution features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial) add nothing once the site is known:
 
-* Overall AUC ≈ 0.52
-* Loop-focused replication AUC ≈ 0.59
+* Paired ΔAUC, site + substitution − site: **−0.002 [−0.03, +0.02]** (leave-family-out)
 
-More importantly, every bootstrapped confidence interval included chance performance. (The overall 0.52 was not bootstrapped in the original run; the scripts now compute a CI for it too.)
+This time the null is informative. The first engine predicted absolute bending (~30° error) and differenced two predictions, so it could not have seen a ~3° effect even if the information were there. The new model predicts movers directly and does find signal in site features. It finds none in the substitution.
 
-The data therefore do not support the claim that local sequence can reliably predict mutation-induced backbone bending.
-
-The result was consistent across multiple validation stages, datasets, and leakage-controlled evaluations.
+The result holds across label definitions (z > 2 or z > 3; four noise-floor priors), leave-site-out and leave-family-out validation.
 
 ---
 
 ## The most informative result
 
-The strongest evidence came from introducing a small amount of non-local structural information.
+Where the mutation sits does carry information:
 
-When a simple description of the surrounding contact environment was added, the AUC moved in the direction, and in the place, that protein physics predicts.
+* Site features: AUC **0.60 [0.56, 0.63]** with whole families held out
+* Beyond secondary structure: **+0.085 [+0.05, +0.12]**
 
-The shift was largest in protein cores, where packing interactions dominate (0.48 → 0.58).
+The null control shows that much of this is not movement. A site model trained only on WT-vs-WT noise reaches AUC 0.555 on the real labels, which is more than half of the margin above chance. Beyond that noise score, the site features add a movement-specific **+0.05 [+0.01, +0.08]**.
 
-This is suggestive, not established. The improvement itself (the paired difference between the two models) was not tested in the original run, and the core subset has no confidence interval. The scripts now compute both.
-
-If it holds up, it suggests the missing information is not hidden in more sophisticated local sequence features but lives in tertiary contacts, meaning backbone bending would be governed mainly by tertiary interactions rather than by local residue patterns.
+That remainder is carried mainly by **non-local contacts**. Their coefficient is +0.21 on real movers and −0.14 on noise. The information that local sequence lacks lives, weakly, in tertiary contacts, which is what the first run's core-subset result (0.48 → 0.58, never tested) suggested.
 
 ---
 
@@ -122,9 +113,9 @@ The conclusion is simple:
 
 > Mutation-induced backbone bending is real.
 >
-> Local sequence does not reliably predict it.
+> Local sequence does not predict it: the substitution adds nothing once the site is known.
 >
-> Structural context appears to help, consistent with it carrying the information that local sequence lacks, but that lift is not yet statistically established.
+> The site's structural context carries a small real signal, mostly through tertiary contacts. At AUC ≈ 0.60 it is not a usable predictor.
 
 That result may be less exciting than discovering a new predictor, but it is arguably more informative.
 
@@ -134,16 +125,15 @@ Knowing where the signal is not can be just as valuable as knowing where it is.
 
 ## Technical highlights
 
-* 136,961 training windows from 568 non-redundant protein chains
-* Family-level holdout evaluation
-* Sequence-identity culling
+* 892 clean WT/mutant pairs from 191 proteins in 158 sequence families, mined systematically from RCSB + SIFTS (7,612 structures screened)
+* Crystal-form matching, resolution cut, ligand-state matching, one row per mutation
+* Heteroscedastic noise floor (σ prior conditioned on B-factor)
+* WT-vs-WT null control for threshold calibration and noise-vs-movement decomposition
+* Leave-site-out and leave-family-out validation (≥ 30% identity families)
 * Residue-cluster bootstrap confidence intervals (mutations at the same site are resampled together)
-* Paired ΔAUC test for model comparisons
-* Leakage-controlled validation
-* Empirical noise-floor estimation
-* Statistical enrichment analysis
-* Explicit replication stages
-* Structural-context ablation testing
+* Paired ΔAUC tests for every model comparison
+* All input sets pinned in `manifests/` for reproducibility
+* Offline synthetic tests for every label-cleaning rule
 
 The emphasis throughout was on falsification, uncertainty estimation, and honest interpretation rather than benchmark optimization.
 
@@ -176,7 +166,7 @@ python -m pytest tests/           # offline synthetic tests (no network)
 
 The scripts must run in this order: later gates reuse the PDB caches (`t4l_pdb/`, `cull_pdb/`, `val_pdb/`) that earlier gates download. On the first run, every RCSB search result is pinned to `manifests/*.json` (see `stats_utils.pinned_ids`). Commit those files so that later runs use the same entries, since live searches drift as the PDB grows. To refresh against today's PDB on purpose, delete a manifest.
 
-> **Status of the numbers.** The Gate 1–5 figures in this README and in `RESULTS.md` come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic. The v2 numbers below come from the current code.
+> **Status of the numbers.** The Gate 1–5 figures quoted in `RESULTS.md` (and the first-run T4L numbers above) come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic. The v2/v3 numbers in this README come from the current code.
 
 ---
 
@@ -226,6 +216,6 @@ After multiple rounds of testing, the evidence does not support that hypothesis.
 
 The signal exists.
 
-The predictor does not.
+The substitution does not predict it, and the site predicts it only weakly.
 
 And that gap turns out to explain something important about protein structure itself.
