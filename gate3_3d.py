@@ -22,6 +22,7 @@ from bending_metric import bending_angle, is_continuous
 from feasibility_t4l import parse_ca, window_bend, PDB_DIR
 from loop_gate import parse_ss, ss_of, pick_t4l, longest, is_conservative
 from gate2_model_feasibility import entry_features, outcome_onehot, AAIDX, TRAIN_DIR
+from stats_utils import cluster_auc_ci, paired_delta_auc
 
 CUTOFF = 8.0
 
@@ -140,17 +141,9 @@ def build_t4l_val():
     return rows
 
 
-def auc_ci(mov, score):
-    from sklearn.metrics import roc_auc_score
-    if not (0 < mov.sum() < len(mov)):
-        return float("nan"), float("nan"), float("nan")
-    auc = roc_auc_score(mov, score)
-    rng = np.random.default_rng(0); idx = np.arange(len(mov)); b = []
-    for _ in range(3000):
-        bi = rng.choice(idx, len(idx), replace=True)
-        if 0 < mov[bi].sum() < len(bi):
-            b.append(roc_auc_score(mov[bi], score[bi]))
-    lo, hi = np.percentile(b, [5, 95])
+def auc_ci(mov, score, sites):
+    """AUC + 90% CI, resampling whole residues (mutations at a site correlate)."""
+    auc, lo, hi, _ = cluster_auc_ci(mov, score, sites)
     return auc, lo, hi
 
 
@@ -181,33 +174,43 @@ def main():
     EFL = np.array([x["ef"] + x["wt_oh"] for x in rows])
     EFLm = np.array([x["ef"] + x["mut_oh"] for x in rows])
     ENV = np.array([x["env"] for x in rows])
+    sites = np.array([x["r"] for x in rows])
     dl = np.abs(Ml.predict(EFLm) - Ml.predict(EFL))
     d3 = np.abs(M3.predict(np.hstack([EFLm, ENV])) - M3.predict(np.hstack([EFL, ENV])))
 
     print("\n" + "=" * 66 + "\n  GATE 3 -- 3D CONTACT ENVIRONMENT vs LOCAL-ONLY\n" + "=" * 66)
     print(f"T4L validation: n={n} single-mutant pairs, movers={k} ({k/n:.0%})")
     for lab, d in [("local-only ", dl), ("local + 3D ", d3)]:
-        auc, lo, hi = auc_ci(mov, d)
+        auc, lo, hi = auc_ci(mov, d, sites)
         ap = average_precision_score(mov, d)
         print(f"  {lab}: AUC={auc:.3f}  90%CI[{lo:.2f},{hi:.2f}]  AP={ap:.3f} (base {k/n:.2f})")
 
     # core-only (helix/sheet) -- where packing dominates and local died
     core = np.array([x["ss"] in "HE" for x in rows])
     if core.sum() >= 20 and 0 < mov[core].sum() < core.sum():
-        al, _, _ = auc_ci(mov[core], dl[core])
-        a3, _, _ = auc_ci(mov[core], d3[core])
+        al, lol, hil = auc_ci(mov[core], dl[core], sites[core])
+        a3c, lo3c, hi3c = auc_ci(mov[core], d3[core], sites[core])
+        dc, dlo, dhi, dp = paired_delta_auc(mov[core], dl[core], d3[core], sites[core])
         print(f"  core subset (n={int(core.sum())}, movers={int(mov[core].sum())}): "
-              f"local AUC={al:.3f} -> local+3D AUC={a3:.3f}")
+              f"local AUC={al:.3f} [{lol:.2f},{hil:.2f}] -> "
+              f"local+3D AUC={a3c:.3f} [{lo3c:.2f},{hi3c:.2f}]")
+        print(f"      paired dAUC(core) = {dc:+.3f}  90%CI[{dlo:+.2f},{dhi:+.2f}]  "
+              f"P(d<=0)={dp:.3f}")
 
-    aL, loL, hiL = auc_ci(mov, dl)
-    a3, lo3, hi3 = auc_ci(mov, d3)
+    aL, loL, hiL = auc_ci(mov, dl, sites)
+    a3, lo3, hi3 = auc_ci(mov, d3, sites)
+    # the lift claim is about the DIFFERENCE, so test the difference directly
+    dA, dlo, dhi, dpv = paired_delta_auc(mov, dl, d3, sites)
+    print(f"  paired dAUC(all)  = {dA:+.3f}  90%CI[{dlo:+.2f},{dhi:+.2f}]  "
+          f"P(d<=0)={dpv:.3f}  ({len(set(sites))} residue clusters)")
     print("\n" + "-" * 66)
-    if lo3 > hiL and a3 >= 0.62:
+    if dlo > 0 and a3 >= 0.62:
         v = ("3D HELPS -- environment-conditioned signal is real; this is the lever. "
              "But note: you've now entered structure-based ddG territory (FoldX/Rosetta/"
              "ThermoMPNN), not novel local-sequence mining.")
-    elif a3 > aL + 0.04:
-        v = (f"3D helps WEAKLY (AUC {aL:.2f}->{a3:.2f}); real but modest, CIs overlap. "
+    elif dA > 0.04:
+        v = (f"3D helps WEAKLY (AUC {aL:.2f}->{a3:.2f}); paired dAUC CI "
+             f"[{dlo:+.2f},{dhi:+.2f}] {'excludes' if dlo > 0 else 'includes'} 0. "
              "The environment matters but the local-bending-delta signal stays weak.")
     else:
         v = (f"3D does NOT rescue it (AUC {aL:.2f}->{a3:.2f}). Even the tertiary environment "
@@ -220,7 +223,7 @@ def main():
     from sklearn.metrics import roc_curve
     plt.figure(figsize=(5.4, 5))
     for lab, d, c in [("local-only", dl, "#888888"), ("local + 3D", d3, "#4C78A8")]:
-        fpr, tpr, _ = roc_curve(mov, d); a, _, _ = auc_ci(mov, d)
+        fpr, tpr, _ = roc_curve(mov, d); a, _, _ = auc_ci(mov, d, sites)
         plt.plot(fpr, tpr, color=c, label=f"{lab} (AUC {a:.2f})")
     plt.plot([0, 1], [0, 1], "k--", lw=.8, label="chance")
     plt.xlabel("FPR"); plt.ylabel("TPR"); plt.title("Does the 3D environment rescue it?")

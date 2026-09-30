@@ -18,6 +18,7 @@ Design choices that keep this honest:
 import json, os, sys, urllib.request, concurrent.futures as cf
 import numpy as np
 from bending_metric import bending_angle, is_continuous
+from stats_utils import pinned_ids
 
 PDB_DIR = "t4l_pdb"; os.makedirs(PDB_DIR, exist_ok=True)
 MAX_DL = 800
@@ -120,7 +121,7 @@ def window_bend(res, start):
 
 def main():
     try:
-        ids = fetch_id_list()
+        ids = pinned_ids("t4l_P00720", fetch_id_list)
     except Exception as e:
         print(f"search API failed ({e}); aborting"); sys.exit(1)
     ids = ids[:MAX_DL]

@@ -20,7 +20,10 @@ These are not inconsistencies; they are three honestly-different measurements:
 
 So the mover-count wobble (72 vs 70, 248 vs 246) is the QC step removing two artifacts,
 **not** noise. Beyond these defined differences, point estimates vary by **±0.02–0.03**
-across runs from sampling/seed variation. That wobble is small — but it is *not* small
+across runs. Every model and bootstrap uses a fixed seed, so this variation comes from
+the **input set**: the original scripts ran live RCSB searches, and the PDB changes
+between runs. The scripts now pin every search result to `manifests/*.json` on
+first run, which removes this source of drift. That wobble is small — but it is *not* small
 relative to the effect being chased. The mover counts throughout are 10–72; a method
 whose claimed signal is smaller than its own run-to-run noise is not a usable method.
 **That the noise and the "signal" are the same size is itself part of the finding.**
@@ -75,11 +78,30 @@ of which the two largest were crystallographic artifacts.
 **Limit:** "non-local contact" here is a crude binary flag; in a packed protein it is
 true almost everywhere, so its non-enrichment is informative but coarse.
 
+## Statistical revision (applies to Gates 2–5; numbers below not yet re-run)
+
+Two defects in the original analysis were fixed in code after these numbers were produced:
+
+1. **Per-pair bootstrap → residue-cluster bootstrap.** Validation pairs are not
+   independent: the 72 T4L movers sit on only 38 residues, and the Gate 4 pool is
+   human-lysozyme-dominated. The original CIs resampled pairs as if independent,
+   which makes them **too narrow**. `stats_utils.cluster_auc_ci` now resamples whole
+   residues (T4L) or (protein, residue) sites (Gate 4). Gate 4 also reports AUC per protein.
+2. **Gate 5 lift was never tested as a difference.** The CI [0.52, 0.66] covers the 3D
+   model's AUC alone, not the 0.516 → 0.590 **lift**. `stats_utils.paired_delta_auc`
+   now scores both models on the same cluster resamples and reports a CI on ΔAUC,
+   for both the full set and the core subset. Gate 2's AUC now also gets a CI.
+
+Expected effect: CIs widen. That can only strengthen the local-only null. The Gate 5
+lower bound of 0.52 may fall to chance. Until the gates are re-run, read every CI
+below as **optimistic**.
+
 ## Gate 3 — Do loops rescue it? (T4L) (`loop_gate.py`)
 
 **Claim:** loops *looked* like the one surviving home for local signal — but T4L
 cannot certify it.
-**Numbers:** movers enriched in loops (**48% vs 25% in helix; OR 2.50, Fisher p 0.041**).
+**Numbers:** movers enriched in loops (**48% of loop mutations are movers vs 25% in helix;
+OR 2.50 for loop vs all non-loop, one-sided Fisher p 0.041**). Single protein, not replicated.
 Loop retrieval **AUC 0.700, 90% CI [0.49, 0.89], n=10 movers.**
 **Honest limit:** the CI lower bound sits **at chance**. With 10 movers this is **not
 distinguishable from chance**; the 0.70 point estimate is a small-sample artifact —
@@ -107,8 +129,9 @@ in the predicted place: the **core subset** (packing-dominated, where local-only
 It supports the diagnosis that the cause is tertiary.
 
 **(2) As a validated predictive improvement — null.**
-Overall lift is **0.516 → 0.590, 90% CI [0.52, 0.66]** (n=70 movers). The lower bound
-barely clears 0.50; this is **not a certified improvement.** Absolute-bending RMSE
+Overall lift is **0.516 → 0.590** (n=70 movers). The **90% CI [0.52, 0.66] covers only the
+3D model's own AUC**, not the lift. The lift itself (paired ΔAUC) was never tested, and
+the core-subset 0.477 → 0.584 has no CI at all. This is **not a certified improvement.** Absolute-bending RMSE
 improved only 30.5° → 27.9° (9%) — the crude composition feature captures a thin slice
 of 3D.
 
@@ -133,10 +156,14 @@ cavity, or energy. A richer 3D model would mean entering established **structure
   √2×RMSE gate was corrected to a direct retrieval measurement.
 - **Leakage control:** sequence-culled training (≤30% identity); validation families
   fully held out (and explicitly excluded by ID in Gates 4–5).
-- **Bootstrap 90% CIs on every AUC**, because the mover counts are small.
+- **Bootstrap 90% CIs on AUCs**, because the mover counts are small. Originally these
+  were per-pair (optimistic) and missing for Gate 2 and the core subset. Both are now
+  fixed in code (residue-cluster bootstrap plus paired ΔAUC); see *Statistical revision*.
 - **Crystallographic-artifact QC:** conservative substitutions with implausibly large
   bends (>10°) flagged and removed (e.g. V111M −32.6°).
 - **Thresholds are empirical** (per-window floors from redundant crystals), not a priori.
+  "Mover" = |Δ| > 2× the per-window robust σ, so roughly 5% of non-movers would
+  cross it by noise alone. That is the right baseline against which to read the 29%.
 
 ## Honest limitations (what even a complete version cannot claim)
 
@@ -155,6 +182,6 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 > Mutation-induced backbone bending is real (Gate 1) but **not distinguishable-from-chance
 > predictable from local sequence** — cores AUC 0.52, loops 0.59 even when powered, both
 > with CIs touching 0.50. Adding crude 3D context nudges the core subset in the
-> theoretically-predicted direction (0.48 → 0.58), confirming the **cause is tertiary**,
-> but reaches no validated predictor. The signal lives in tertiary structure — the domain
+> theoretically-predicted direction (0.48 → 0.58), **consistent with** a tertiary cause
+> (the lift itself is not yet statistically tested), and reaches no validated predictor. The signal lives in tertiary structure — the domain
 > of heavy structure-based methods, not a light interpretable local model.

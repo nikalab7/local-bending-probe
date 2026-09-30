@@ -19,6 +19,7 @@ from feasibility_t4l import parse_ca, window_bend
 from loop_gate import parse_ss, ss_of, is_conservative
 from gate2_model_feasibility import entry_features, outcome_onehot, TRAIN_DIR
 from mover_composition import has_nonlocal
+from stats_utils import pinned_ids, cluster_auc_ci
 
 VAL_DIR = "val_pdb"; os.makedirs(VAL_DIR, exist_ok=True)
 PROTEINS = [("P00644", "SNase", 149), ("P00648", "barnase", 110),
@@ -67,7 +68,7 @@ def pick_chain(chains, hint, tol=30):
 
 
 def build_protein(uniprot, name, hint, val_ids):
-    ids = fetch_ids(uniprot)[:MAX_PER]
+    ids = pinned_ids(f"val_{uniprot}_{name}", lambda: fetch_ids(uniprot))[:MAX_PER]
     with cf.ThreadPoolExecutor(max_workers=12) as ex:
         got = [p for p in ex.map(fetch_pdb, ids) if p]
     val_ids.update(p.upper() for p in got)
@@ -195,14 +196,17 @@ def score(rows, model, label):
         print(f"  {label}: n={n} movers={k} -> cannot score"); return
     auc = roc_auc_score(mov, dp); ap = average_precision_score(mov, dp)
     patk = mov[np.argsort(-dp)[:k]].mean()
-    rng = np.random.default_rng(0); idx = np.arange(n); b = []
-    for _ in range(3000):
-        bi = rng.choice(idx, n, replace=True)
-        if 0 < mov[bi].sum() < len(bi):
-            b.append(roc_auc_score(mov[bi], dp[bi]))
-    lo, hi = np.percentile(b, [5, 95])
+    # resample whole (protein, residue) sites: pairs sharing a site are correlated
+    _, lo, hi, ncl = cluster_auc_ci(mov, dp, [(x["prot"], x["r"]) for x in rows])
     print(f"  {label}: n={n} movers={k} (base {k/n:.0%})  "
-          f"AUC={auc:.3f} 90%CI[{lo:.2f},{hi:.2f}]  AP={ap:.3f}  p@{k}={patk:.3f}")
+          f"AUC={auc:.3f} 90%CI[{lo:.2f},{hi:.2f}] ({ncl} site clusters)  "
+          f"AP={ap:.3f}  p@{k}={patk:.3f}")
+    # per-protein AUCs: the pool is dominated by one protein, so show each
+    for prot in sorted(set(x["prot"] for x in rows)):
+        sel = np.array([x["prot"] == prot for x in rows])
+        if 0 < mov[sel].sum() < sel.sum():
+            print(f"      {prot:16s} n={int(sel.sum()):3d} movers={int(mov[sel].sum()):3d}  "
+                  f"AUC={roc_auc_score(mov[sel], dp[sel]):.3f}")
     return auc, lo, hi, n, k
 
 

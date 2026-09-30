@@ -12,7 +12,7 @@ To answer that, I built a lightweight, interpretable pipeline designed around a 
 
 The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
 
-Local sequence contains enough information to explain some aspects of absolute backbone geometry, but it contains remarkably little information about which mutations will change that geometry.
+Local sequence contains enough information to explain some aspects of absolute backbone geometry, but at the sample sizes available here it showed no detectable information about which mutations will change that geometry.
 
 The failure of the local model became the result.
 
@@ -63,17 +63,17 @@ The objective was not to maximize performance but to determine where the predict
 
 The phenomenon itself is real.
 
-Across experimental structures, approximately 29% of mutations produced backbone changes larger than the measured structural noise floor.
+In T4 lysozyme, 29% of single mutations (72/248) produced backbone changes larger than twice the measured per-window noise floor (a threshold that pure noise would cross roughly 5% of the time).
 
-Mutations do move protein backbones.
+Mutations do move protein backbones. The 29% is best read as a ceiling rather than a typical rate: T4 lysozyme is unusually mutation-tolerant, its mutagenesis is core-biased, and noise floors estimated from sparsely sampled windows inflate the above-floor fraction.
 
 The project also confirmed a well-known structural principle:
 
 > Backbone changes are more common in flexible regions.
 
-Mutations were significantly enriched in loops compared with more rigid secondary structures.
+In T4 lysozyme, mutations in loops were more often movers than mutations in helices (48% of loop mutations were movers vs 25% in helices; OR 2.50 for loop vs all non-loop, one-sided Fisher p = 0.041).
 
-These findings survived statistical testing and replication.
+The noise floor was confirmed by two independent estimates (0.98° and 0.75°). The loop enrichment is a single-protein result at p = 0.041 and has not been replicated on other proteins.
 
 ---
 
@@ -86,7 +86,7 @@ Models using only local sequence information performed only slightly above chanc
 * Overall AUC ≈ 0.52
 * Loop-focused replication AUC ≈ 0.59
 
-More importantly, every confidence interval included chance performance.
+More importantly, every bootstrapped confidence interval included chance performance. (The overall 0.52 was not bootstrapped in the original run; the scripts now compute a CI for it too.)
 
 The data therefore do not support the claim that local sequence can reliably predict mutation-induced backbone bending.
 
@@ -98,15 +98,13 @@ The result was consistent across multiple validation stages, datasets, and leaka
 
 The strongest evidence came from introducing a small amount of non-local structural information.
 
-When a simple description of the surrounding contact environment was added, performance improved in exactly the situations where protein physics predicts it should.
+When a simple description of the surrounding contact environment was added, the AUC moved in the direction, and in the place, that protein physics predicts.
 
-The effect was most visible in protein cores, where packing interactions dominate.
+The shift was largest in protein cores, where packing interactions dominate (0.48 → 0.58).
 
-This suggests that the information missing from the local model is not hidden in more sophisticated sequence features.
+This is suggestive, not established. The improvement itself (the paired difference between the two models) was not tested in the original run, and the core subset has no confidence interval. The scripts now compute both.
 
-It is largely absent from local sequence altogether.
-
-Backbone bending appears to be governed primarily by tertiary interactions rather than local residue patterns.
+If it holds up, it suggests the missing information is not hidden in more sophisticated local sequence features but lives in tertiary contacts, meaning backbone bending would be governed mainly by tertiary interactions rather than by local residue patterns.
 
 ---
 
@@ -126,7 +124,7 @@ The conclusion is simple:
 >
 > Local sequence does not reliably predict it.
 >
-> Structural context helps because structural context contains the information that local sequence lacks.
+> Structural context appears to help, consistent with it carrying the information that local sequence lacks, but that lift is not yet statistically established.
 
 That result may be less exciting than discovering a new predictor, but it is arguably more informative.
 
@@ -139,7 +137,8 @@ Knowing where the signal is not can be just as valuable as knowing where it is.
 * 136,961 training windows from 568 non-redundant protein chains
 * Family-level holdout evaluation
 * Sequence-identity culling
-* Bootstrap confidence intervals
+* Residue-cluster bootstrap confidence intervals (mutations at the same site are resampled together)
+* Paired ΔAUC test for model comparisons
 * Leakage-controlled validation
 * Empirical noise-floor estimation
 * Statistical enrichment analysis
@@ -147,6 +146,26 @@ Knowing where the signal is not can be just as valuable as knowing where it is.
 * Structural-context ablation testing
 
 The emphasis throughout was on falsification, uncertainty estimation, and honest interpretation rather than benchmark optimization.
+
+---
+
+## Reproducing
+
+```bash
+pip install -r requirements.txt
+python bending_metric.py          # Gate 0 self-test (no network)
+python feasibility_t4l.py         # Gate 1  (downloads T4L PDB entries)
+python gate2_model_feasibility.py # Gate 2  (downloads the 30%-culled training set)
+python mover_composition.py       # Gate 2b
+python loop_gate.py               # Gate 3
+python powered_loop_gate.py       # Gate 4  (downloads validation proteins)
+python gate3_3d.py                # Gate 5
+python summary_figure.py
+```
+
+The scripts must run in this order: later gates reuse the PDB caches (`t4l_pdb/`, `cull_pdb/`, `val_pdb/`) that earlier gates download. On the first run, every RCSB search result is pinned to `manifests/*.json` (see `stats_utils.pinned_ids`). Commit those files so that later runs use the same entries, since live searches drift as the PDB grows. To refresh against today's PDB on purpose, delete a manifest.
+
+> **Status of the numbers.** The figures in this README and in `RESULTS.md` come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic.
 
 ---
 
