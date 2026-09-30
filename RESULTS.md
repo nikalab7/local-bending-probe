@@ -148,7 +148,7 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 
 ---
 
-## v2 — clean labels + delta model (`pairs.py`, `delta_model.py`) — NOT YET RUN
+## v2 — clean labels + delta model (`pairs.py`, `delta_model.py`)
 
 **Why.** Three problems found in the Gate 1–5 pipeline:
 1. *Label construction.* There was no per-variant aggregation: T4L site 99 (L99A ligand soaks) supplied 61/248 rows, 4 of them movers, and dropping it raises the mover rate from 29% to 36%. There was no crystal-form matching, no resolution cut on the validation proteins and no ligand check (SPEC §2.3–2.4 were not implemented). The floor came from raw MADs of as few as 3 WT crystals, and the threshold ignored the mutant side's own noise. The label is fragile: 72 movers at 2σ, 41 at 3σ, 30 at |Δ|>3°.
@@ -157,7 +157,50 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 
 **What v2 does.** It keeps a mutant only when both sides are ≤2.5 Å. It uses a same-crystal-form WT reference and excludes mutant crystals whose ligand state near the window differs from the form's WT. It aggregates to one row per mutation. The floor is σ shrunk toward the pooled value (k = 4), with SE = 1.2533·σ·√(1/m + 1/n), and mover := |Δ|/SE > 2. The model is logistic regression or shallow gradient boosting on site and substitution features. Evaluation is leave-site-out (5-fold × 5 repeats) and leave-protein-out, with residue-cluster bootstrap CIs and a paired ΔAUC of site+subst over site.
 
-**Status.** Unit and synthetic end-to-end tests pass (`python -m pytest tests/`). They cover the parser against `parse_ca`, form matching, ligand exclusion, aggregation, the resolution cut, AUC equivalence, a planted-signal recovery and a null check. The code has not yet been run on real data.
+**Tests.** Unit and synthetic end-to-end tests pass (`python -m pytest tests/`). They cover the parser against `parse_ca`, form matching, ligand exclusion, aggregation, the resolution cut, AUC equivalence, a planted-signal recovery and a null check.
+
+**Run on real data.** Input sets are pinned in `manifests/`. Re-running `feasibility_t4l.py` on the pinned set reproduces Gate 1 exactly (248 windows, 72 above-floor events, 29%). Clean labels are in `pairs_clean.csv`, model output in `results/delta_model.json` and `delta_model.png`.
+
+*What the filters remove* (`pairs.py` diagnostics):
+
+| protein | structures | dropped: resolution | dropped: ligand mismatch (mutant crystals) | variant-forms with no clean crystal / no WT floor | clean mutations | movers |
+|---|---|---|---|---|---|---|
+| T4L | 618 | 19 | 112 | 42 / 17 | 113 | 36 |
+| human lysozyme | 213 | 3 | 13 | 8 / 38 | 94 | 29 |
+| RNase A | 323 | 8 | 10 | 10 / 6 | 13 | 7 |
+| barnase | 51 | 7 | 0 | 0 / 5 | 15 | 3 |
+| SNase | 290 | 8 | — | — / 92 | 0 | 0 (1 WT crystal) |
+
+T4L falls from 248 window rows to 113 mutations. The drop comes mostly from ligand soaks (the L99A series) and from aggregating to one row per mutation. The T4L mover rate (32%) is close to Gate 1's 29%, so the phenomenon survives clean labelling. Pooled: 235 mutations, 75 movers (|z|>2), 121 sites, 4 proteins.
+
+*Delta model* (90% residue-cluster bootstrap CIs):
+
+| features | model | leave-site-out AUC | leave-protein-out AUC |
+|---|---|---|---|
+| site | logreg | 0.620 [0.53, 0.70] | 0.626 [0.53, 0.70] |
+| subst | logreg | 0.531 [0.46, 0.60] | 0.539 [0.46, 0.61] |
+| site+subst | logreg | 0.621 [0.53, 0.70] | 0.596 [0.50, 0.67] |
+| site | hgb | 0.423 [0.34, 0.50] | 0.418 [0.34, 0.49] |
+| subst | hgb | 0.471 [0.40, 0.56] | 0.574 [0.51, 0.63] |
+| site+subst | hgb | 0.511 [0.44, 0.58] | 0.536 [0.45, 0.61] |
+
+Paired ΔAUC, site+subst − site: logreg +0.001 [−0.04, +0.05] (site-out) and −0.029 [−0.08, +0.02] (protein-out). The hgb contrasts (+0.09, +0.12, CIs above 0) are **not** evidence for substitution. Site-only hgb scores below chance (overfitting with n = 235), so these contrasts measure a broken baseline. Site+subst hgb is itself at chance.
+
+*Robustness checks* (leave-site-out logreg; scratch analysis, not a committed script):
+
+| mover label | movers | site AUC | ΔAUC site+subst − site |
+|---|---|---|---|
+| shrunk σ, z>2 (default) | 75 | 0.62 [0.52, 0.69] | +0.002 [−0.04, +0.05] |
+| raw σ, z>2 | 81 | 0.54 [0.45, 0.63] | +0.006 [−0.05, +0.07] |
+| shrunk σ, z>3 | 40 | 0.73 [0.65, 0.79] | −0.009 [−0.05, +0.03] |
+| raw σ, z>3 | 46 | 0.59 [0.51, 0.66] | −0.005 [−0.06, +0.05] |
+
+Within-protein site AUCs are similar to the pooled value (T4L 0.59, human lysozyme 0.68, RNase A 0.60 at z>2), so the pooled number is not just between-protein base rates. Leave-protein-out agrees with leave-site-out.
+
+**Reading.**
+1. *Substitution identity adds nothing once the site is known.* This holds under every label definition above. It is the local-sequence question asked with an engine that predicts Δ directly, so it closes the "the engine couldn't see it" loophole in Gates 2–5.
+2. *Site context carries a weak, fragile signal.* The largest standardized coefficients are WT bend (−0.56), window B-factor (+0.39) and non-local contacts (+0.35). Moving a handful of borderline labels (6 of 235) shifts the AUC by ~0.08. Window B-factor correlates with the raw WT floor σ (Spearman ρ = 0.51), so part of the signal may be noise-floor structure rather than mutation-driven movement. A heteroscedastic floor, shrinking toward a B-factor-conditioned prior instead of one pooled σ, is the obvious next fix before the site signal is claimed.
+3. Gradient boosting is not usable at this n. Report logreg.
 
 ## Methodological notes worth highlighting
 
@@ -196,3 +239,7 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 > theoretically-predicted direction (0.48 → 0.58), **consistent with** a tertiary cause
 > (the lift itself is not yet statistically tested), and reaches no validated predictor. The signal lives in tertiary structure — the domain
 > of heavy structure-based methods, not a light interpretable local model.
+>
+> **v2 update (clean labels, delta-targeted model):** substitution identity adds nothing
+> over site context (paired ΔAUC +0.001 [−0.04, +0.05]); site context alone reaches
+> AUC 0.62 [0.53, 0.70], but that signal is fragile to the noise-floor definition.
