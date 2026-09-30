@@ -22,11 +22,16 @@ site move the backbone" -- from two feature groups computed on the WT scaffold:
 
 The scientific question becomes a clean ablation:
   * SITE vs chance      -> is "where" predictive?
+  * SITE - SS           -> is "where" more than secondary structure?
   * SITE+SUBST - SITE   -> does the substitution identity (the local-sequence
                            part) add anything once the site is known?
-Both are scored out-of-fold with LEAVE-SITE-OUT CV (no residue appears in both
-train and test) and LEAVE-PROTEIN-OUT CV, with residue-cluster bootstrap CIs
-and a paired delta-AUC test.
+All are scored out-of-fold with LEAVE-SITE-OUT CV (no residue appears in both
+train and test) and LEAVE-FAMILY-OUT CV (whole >= 30%-identity families held
+out), with residue-cluster bootstrap CIs and paired delta-AUC tests.
+
+NULL CONTROL. The same site model is trained on WT-vs-WT pseudo-mutants
+(pairs.null_rows), where every "mover" is noise. If site features predict
+those, the real-data site AUC can be noise structure, not movement.
 
 Usage: python delta_model.py [--z 2.0] [--prior bfactor|pooled]
 """
@@ -74,7 +79,12 @@ SITE = ["ss_H", "ss_E", "ss_L", "b_site", "b_window", "n_ca10", "hse_up",
         "nonlocal_contacts", "wt_bend", "log_term_dist"]
 SUBST = ["d_vol", "abs_d_vol", "d_hyd", "d_charge", "to_P", "from_P", "to_G",
          "from_G", "blosum62", "cavity", "d_hyd_x_burial"]
-FEATURE_SETS = {"site": SITE, "subst": SUBST, "site+subst": SITE + SUBST}
+SS = ["ss_H", "ss_E", "ss_L"]
+FEATURE_SETS = {"ss": SS, "site": SITE, "subst": SUBST, "site+subst": SITE + SUBST}
+# paired contrasts (base, richer, name): the two questions the model answers
+CONTRASTS = [("site", "site+subst", "subst_over_site"),   # does "what" add to "where"?
+             ("ss", "site", "site_over_ss")]              # is "where" more than SS?
+FAMILY_FOLDS = 10
 
 
 # -------------------------------- features ----------------------------------
@@ -171,41 +181,74 @@ def site_folds(groups, k, seed):
     return np.array([fold[g] for g in groups])
 
 
-def evaluate(F, y, groups, proteins, k=5, repeats=5):
-    results = {}
-    preds = {}
-    for name, cols in FEATURE_SETS.items():
+def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
+             kinds=("logreg", "hgb")):
+    """Out-of-fold AUCs + paired contrasts.
+
+    leave_site_out   : (protein, residue) groups in k folds, averaged over repeats
+    leave_family_out : whole sequence families (>= 30% identity) in
+                       FAMILY_FOLDS folds (leave-one-family-out if fewer)
+    """
+    from sklearn.metrics import average_precision_score
+    feature_sets = feature_sets or FEATURE_SETS
+    families = np.asarray(families)
+    n_fam = len(set(families))
+    results, preds = {}, {}
+    for name, cols in feature_sets.items():
         X = matrix(F, cols)
-        for kind in ("logreg", "hgb"):
-            # leave-site-out, averaged over repeated random group splits
+        for kind in kinds:
             P = np.nanmean([oof_predict(X, y, site_folds(groups, k, s), kind)
                             for s in range(repeats)], axis=0)
-            # leave-protein-out (only if >1 protein)
-            Q = oof_predict(X, y, np.array(proteins), kind) \
-                if len(set(proteins)) > 1 else np.full(len(y), np.nan)
+            Q = oof_predict(X, y, site_folds(families, min(FAMILY_FOLDS, n_fam), 0), kind) \
+                if n_fam > 1 else np.full(len(y), np.nan)
             preds[(name, kind)] = (P, Q)
             res = {}
-            for cv, pr in (("leave_site_out", P), ("leave_protein_out", Q)):
+            for cv, pr in (("leave_site_out", P), ("leave_family_out", Q)):
                 ok = np.isfinite(pr)
                 if ok.sum() < 10 or not (0 < y[ok].sum() < ok.sum()):
                     continue
                 auc, lo, hi, ncl = cluster_auc_ci(y[ok], pr[ok], groups[ok])
-                from sklearn.metrics import average_precision_score
                 res[cv] = dict(auc=auc, lo=lo, hi=hi, n=int(ok.sum()),
                                movers=int(y[ok].sum()), clusters=ncl,
                                ap=float(average_precision_score(y[ok], pr[ok])),
                                base=float(y[ok].mean()))
             results[f"{name}|{kind}"] = res
-    # the decisive contrast: does substitution identity add to the site?
     contrasts = {}
-    for kind in ("logreg", "hgb"):
-        for cv, j in (("leave_site_out", 0), ("leave_protein_out", 1)):
-            a = preds[("site", kind)][j]; b = preds[("site+subst", kind)][j]
-            ok = np.isfinite(a) & np.isfinite(b)
-            if ok.sum() >= 10 and 0 < y[ok].sum() < ok.sum():
-                d, lo, hi, p = paired_delta_auc(y[ok], a[ok], b[ok], groups[ok])
-                contrasts[f"{kind}|{cv}"] = dict(delta=d, lo=lo, hi=hi, p_le0=p)
+    for base, rich, label in CONTRASTS:
+        for kind in kinds:
+            if (base, kind) not in preds or (rich, kind) not in preds:
+                continue
+            for cv, j in (("leave_site_out", 0), ("leave_family_out", 1)):
+                a = preds[(base, kind)][j]; b = preds[(rich, kind)][j]
+                ok = np.isfinite(a) & np.isfinite(b)
+                if ok.sum() >= 10 and 0 < y[ok].sum() < ok.sum():
+                    d, lo, hi, p = paired_delta_auc(y[ok], a[ok], b[ok], groups[ok])
+                    contrasts[f"{label}|{kind}|{cv}"] = dict(delta=d, lo=lo, hi=hi, p_le0=p)
     return results, contrasts
+
+
+def null_control(null, zthr):
+    """Site model on WT-vs-WT pseudo-mutants (pairs.null_rows).
+
+    Every pseudo-mover is noise. Returns the pseudo-mover rate (calibration of
+    the z threshold) and the leave-site-out AUC of the site and SS models on
+    pseudo labels: an AUC above 0.5 means site features predict WHERE the
+    noise is, which would also inflate the real-data site AUC.
+    """
+    if not null:
+        return None
+    y = np.array([abs(x["z"]) > zthr for x in null])
+    g = np.array([f"{x['protein']}:{x['r']}" for x in null])
+    fam = [x["family"] for x in null]
+    out = dict(n=len(y), movers=int(y.sum()), rate=float(y.mean()),
+               sites=len(set(g)))
+    if y.sum() < 10:
+        return out
+    F = featurize(null)
+    res, con = evaluate(F, y, g, fam, repeats=2, kinds=("logreg",),
+                        feature_sets={"ss": SS, "site": SITE})
+    out.update(results=res, contrasts=con)
+    return out
 
 
 # ---------------------------------- main -------------------------------------
@@ -220,39 +263,51 @@ def main():
     from pairs import load_proteins, Z_MOVER, PRIOR
     zthr = args.z if args.z is not None else Z_MOVER
     prior = args.prior or PRIOR
-    data = load_proteins(prior)
+    null = []
+    data = load_proteins(prior, null_out=null)
     rows = [x for rs, _ in data.values() for x in rs]
-    for name, (rs, diag) in data.items():
-        print(f"{name:16s} mutations={diag.get('mutations', 0):4d} "
-              f"movers={diag.get('movers', 0):3d}")
+    used = sorted(((d.get("mutations", 0), d.get("movers", 0), n) for n, (_, d) in data.items()
+                   if d.get("mutations", 0)), reverse=True)
+    print(f"proteins with >= 1 clean mutation: {len(used)} / {len(data)}; largest:")
+    for m, mv, name in used[:12]:
+        print(f"  {name:16s} mutations={m:4d} movers={mv:3d}")
     if not rows:
         print("no clean pairs -- run the gate scripts first to fill the PDB caches")
         return
     y = np.array([abs(x["z"]) > zthr for x in rows])
     groups = np.array([f"{x['protein']}:{x['r']}" for x in rows])
     proteins = [x["protein"] for x in rows]
+    families = [x["family"] for x in rows]
     print(f"pooled: n={len(y)} mutations, {int(y.sum())} movers (|z|>{zthr}), "
-          f"{len(set(groups))} sites, {len(set(proteins))} proteins")
+          f"{len(set(groups))} sites, {len(set(proteins))} proteins, "
+          f"{len(set(families))} families")
     if y.sum() < 10 or (~y).sum() < 10:
         print("too few movers or non-movers to evaluate"); return
 
     F = featurize(rows)
-    results, contrasts = evaluate(F, y, groups, proteins)
+    results, contrasts = evaluate(F, y, groups, families)
+    nc = null_control(null, zthr)
 
     print("\n" + "=" * 74 + "\n  DELTA MODEL -- out-of-fold mover retrieval\n" + "=" * 74)
     for key, res in results.items():
         for cv, m in res.items():
             print(f"  {key:18s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}] "
                   f"AP={m['ap']:.3f} (base {m['base']:.2f})  n={m['n']} movers={m['movers']}")
-    print("\n  does SUBSTITUTION add to SITE?  (paired dAUC, site+subst - site)")
+    print("\n  paired dAUC: subst_over_site = (site+subst) - site;  site_over_ss = site - ss")
     for key, c in contrasts.items():
-        print(f"  {key:26s} dAUC={c['delta']:+.3f} 90%CI[{c['lo']:+.2f},{c['hi']:+.2f}] "
+        print(f"  {key:38s} dAUC={c['delta']:+.3f} 90%CI[{c['lo']:+.2f},{c['hi']:+.2f}] "
               f"P(d<=0)={c['p_le0']:.3f}")
+    if nc:
+        print(f"\n  NULL CONTROL (WT-vs-WT pseudo-mutants): n={nc['n']} at {nc['sites']} sites, "
+              f"pseudo-movers={nc['movers']} ({nc['rate']:.1%}; real {y.mean():.1%})")
+        for key, res in nc.get("results", {}).items():
+            for cv, m in res.items():
+                print(f"  {key:18s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}]")
 
     os.makedirs("results", exist_ok=True)
     with open("results/delta_model.json", "w") as fh:
         json.dump(dict(z_threshold=zthr, prior=prior, n=len(y), movers=int(y.sum()),
-                       results=results, contrasts=contrasts), fh, indent=1)
+                       results=results, contrasts=contrasts, null_control=nc), fh, indent=1)
     print("\nwrote results/delta_model.json")
 
     import matplotlib; matplotlib.use("Agg")
