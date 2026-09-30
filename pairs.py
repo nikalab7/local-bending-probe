@@ -15,9 +15,15 @@ rows. This module fixes the labels:
                   what WT crystals of that form typically carry is excluded.
   4. AGGREGATION  one row per MUTATION: median bending over its crystals (the
                   form with the most crystals is used), not one row per PDB entry.
-  5. NOISE FLOOR  per-window WT sigma is shrunk toward the pooled sigma of the
-                  form (few-crystal MADs are unreliable), and the threshold uses
-                  the standard error of a median-vs-median difference:
+  5. NOISE FLOOR  per-window WT sigma is shrunk toward a prior (few-crystal MADs
+                  are unreliable). The default prior is heteroscedastic: within
+                  each form, log(sigma) is regressed on the window's WT B-factor
+                  (z within chain), because flexible windows are also noisier.
+                  Shrinking every window toward ONE pooled sigma pulls high-B
+                  windows' sigma down, inflates their z, and manufactures a
+                  B-factor -> "mover" association. prior="pooled" keeps the old
+                  behaviour for comparison. The threshold uses the standard
+                  error of a median-vs-median difference:
                       SE = 1.2533 * sigma * sqrt(1/m + 1/n)
                   mover := |delta| / SE > Z_MOVER   (~5% false-positive rate).
 
@@ -34,7 +40,9 @@ MAX_RES = 2.5          # Angstrom, SPEC 2.3
 CELL_TOL = 0.02        # relative tolerance on a, b, c
 ANGLE_TOL = 2.0        # degrees on alpha, beta, gamma
 MIN_WT = 3             # WT crystals of the same form needed for a floor
-SHRINK_K = 4           # pseudo-crystals of pooled sigma added to each window
+SHRINK_K = 4           # pseudo-crystals of prior sigma added to each window
+PRIOR = "bfactor"      # sigma prior: "bfactor" (log-linear in window B) | "pooled"
+PRIOR_MIN_WINDOWS = 10 # fewer usable windows in a form -> fall back to pooled
 Z_MOVER = 2.0
 LIG_CUTOFF = 8.0       # Angstrom, het atom to any window C-alpha
 LIG_TYPICAL = 0.5      # het present in >= this fraction of form-WT = "normal"
@@ -136,6 +144,40 @@ def ss_of(st, ch, r):
     return "L"
 
 
+def chain_bz(res):
+    """{resSeq: C-alpha B-factor z-scored within the chain} (NaN-safe)."""
+    keys = sorted(res)
+    bf = np.array([res[k][2] for k in keys], float)
+    fin = np.isfinite(bf)
+    if fin.sum() < 3 or bf[fin].std() == 0:
+        return {k: np.nan for k in keys}
+    z = (bf - bf[fin].mean()) / bf[fin].std()
+    return dict(zip(keys, z))
+
+
+def fit_sigma_prior(sig, bw, n, pooled):
+    """Per-window prior sigma from WT B-factor: log(sigma) = a + b * bw.
+
+    sig, bw, n : per-window raw sigma, WT window B z-score, WT crystal count.
+    Slope by weighted least squares (weight n: more crystals, less noisy
+    log-sigma); intercept set so the median residual is 0, which keeps the
+    prior on the same scale as the pooled median. The prior is clipped to the
+    5-95th percentile of observed sigma so it never extrapolates. Too few
+    windows or no B variation -> constant pooled prior, slope 0.
+    Returns (prior array, slope).
+    """
+    sig, bw, n = (np.asarray(v, float) for v in (sig, bw, n))
+    use = (sig > 0) & np.isfinite(bw)
+    if use.sum() < PRIOR_MIN_WINDOWS or np.std(bw[use]) < 1e-6:
+        return np.full(len(sig), pooled), 0.0
+    ls = np.log(sig[use])
+    b = float(np.polyfit(bw[use], ls, 1, w=np.sqrt(n[use]))[0])
+    a = float(np.median(ls - b * bw[use]))
+    lo, hi = np.percentile(sig[use], [5, 95])
+    bwf = np.where(np.isfinite(bw), bw, np.nanmedian(bw[use]))
+    return np.clip(np.exp(a + b * bwf), lo, hi), b
+
+
 def window_bend(res, s):
     """Bending of window s..s+4 or None (missing residue / chain break)."""
     win = [s + k for k in range(5)]
@@ -181,11 +223,12 @@ def near_hets(st, res, s):
 
 
 # ------------------------------ pair builder --------------------------------
-def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
+def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR):
     """Clean one-row-per-mutation labels for one protein.
 
     pdb_paths  : {pid: path}
     pick_chain : chains -> (chain_id, residues) or (None, None)
+    prior      : noise-floor prior, "bfactor" or "pooled" (see module doc)
     Returns (rows, diag). Each row holds the label (delta, se, z, mover) plus
     what delta_model needs to featurise the site (scaffold residues etc.).
     """
@@ -236,23 +279,43 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
             mut_by_key[(form[p], kind[p])].append(p)
     diag["forms_with_floor"] = sum(len(v) >= MIN_WT for v in wt_by_form.values())
 
-    # per-form WT window statistics, shrunk sigma
+    # per-form WT window statistics + sigma prior
+    if prior not in ("bfactor", "pooled"):
+        raise ValueError(f"unknown prior {prior!r}")
     wt_stats = {}
     for f, wts in wt_by_form.items():
         if len(wts) < MIN_WT:
             continue
+        bz = [chain_bz(structs[p]["res"]) for p in wts]
         per = {}
         for s in range(min(cons), max(cons) - 3):
-            vals = np.array([v for v in (window_bend(structs[p]["res"], s) for p in wts)
-                             if v is not None])
+            vals, bws = [], []
+            for p, z in zip(wts, bz):
+                v = window_bend(structs[p]["res"], s)
+                if v is not None:
+                    vals.append(v)
+                    zw = np.array([z[w] for w in range(s, s + 5)])
+                    bws.append(float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
+                               else np.nan)
             if len(vals) >= MIN_WT:
+                vals = np.array(vals)
                 med = float(np.median(vals))
-                per[s] = (med, float(1.4826 * np.median(np.abs(vals - med))), len(vals))
-        pos = [sig for _, sig, _ in per.values() if sig > 0]
+                bws = np.array(bws)
+                bw = float(np.median(bws[np.isfinite(bws)])) if np.isfinite(bws).any() else np.nan
+                per[s] = (med, float(1.4826 * np.median(np.abs(vals - med))), len(vals), bw)
+        pos = [v[1] for v in per.values() if v[1] > 0]
         if not pos:
             continue
         pooled = float(np.median(pos))
-        wt_stats[f] = dict(per=per, pooled=pooled, wts=wts)
+        keys = sorted(per)
+        if prior == "bfactor":
+            pr, slope = fit_sigma_prior([per[s][1] for s in keys], [per[s][3] for s in keys],
+                                        [per[s][2] for s in keys], pooled)
+        else:
+            pr, slope = np.full(len(keys), pooled), 0.0
+        diag[f"prior_slope[{f}]"] = round(slope, 3)
+        wt_stats[f] = dict(per=per, pooled=pooled, wts=wts,
+                           prior=dict(zip(keys, map(float, pr))))
 
     # one candidate per (form, mutation); then keep the best-covered form
     cand = defaultdict(list)
@@ -266,7 +329,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
             diag["variant_window_outside_consensus"] += 1
             continue
         W = wt_stats[f]
-        wt_med, sig_hat, n = W["per"][s]
+        wt_med, sig_hat, n, bw_wt = W["per"][s]
         # ligand state that is normal for this form at this window
         wt_lig = Counter()
         for p in W["wts"]:
@@ -285,7 +348,8 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
             diag["variant_form_no_clean_crystal"] += 1
             continue
         m = len(bends)
-        sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * W["pooled"] ** 2) / (n + SHRINK_K)))
+        sig_prior = W["prior"][s]
+        sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * sig_prior ** 2) / (n + SHRINK_K)))
         se = MED_EFF * sig * np.sqrt(1.0 / m + 1.0 / n)
         delta = float(np.median(bends)) - wt_med
         # best-resolution WT of this form that actually resolves the window
@@ -294,6 +358,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
         cand[mut].append(dict(
             protein=protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
             n_wt=n, n_mut=m, wt_bend=wt_med, sigma=sig, sigma_raw=sig_hat,
+            sigma_prior=sig_prior, b_window_wt=bw_wt,
             delta=delta, se=float(se), z=float(delta / se),
             mover=bool(abs(delta) > Z_MOVER * se),
             res_mut=float(np.median([structs[p]["resolution"] for p in used])),
@@ -309,7 +374,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5):
 
 
 # --------------------------------- CLI --------------------------------------
-def load_proteins():
+def load_proteins(prior=PRIOR):
     """Clean pairs for T4L + the Gate 4 proteins, from the gate caches."""
     from feasibility_t4l import PDB_DIR, pick_t4l_chain
     from stats_utils import pinned_ids
@@ -325,7 +390,7 @@ def load_proteins():
     t4l = {f[:-4]: os.path.join(PDB_DIR, f) for f in os.listdir(PDB_DIR)
            if f.endswith(".pdb")} if os.path.isdir(PDB_DIR) else {}
     if t4l:
-        out["T4L"] = build_pairs(t4l, t4l_pick, "T4L", min_cons=10)
+        out["T4L"] = build_pairs(t4l, t4l_pick, "T4L", min_cons=10, prior=prior)
     try:
         from powered_loop_gate import PROTEINS, VAL_DIR, pick_chain, fetch_ids, MAX_PER
     except Exception:
@@ -335,18 +400,24 @@ def load_proteins():
         paths = {p: os.path.join(VAL_DIR, f"{p}.pdb") for p in ids
                  if os.path.exists(os.path.join(VAL_DIR, f"{p}.pdb"))}
         if paths:
-            out[name] = build_pairs(paths, lambda c, h=hint: pick_chain(c, h), name)
+            out[name] = build_pairs(paths, lambda c, h=hint: pick_chain(c, h), name,
+                                    prior=prior)
     return out
 
 
 def main():
+    import argparse
     import csv
-    data = load_proteins()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--prior", choices=("bfactor", "pooled"), default=PRIOR,
+                    help="noise-floor sigma prior (default: %(default)s)")
+    args = ap.parse_args()
+    data = load_proteins(args.prior)
     if not data:
         print("no cached PDB files -- run feasibility_t4l.py / powered_loop_gate.py first")
         return
     fields = ["protein", "r", "wt", "mut", "form", "n_wt", "n_mut", "wt_bend",
-              "sigma_raw", "sigma", "delta", "se", "z", "mover", "res_mut",
+              "sigma_raw", "sigma_prior", "b_window_wt", "sigma", "delta", "se", "z", "mover", "res_mut",
               "scaffold_ss", "scaffold", "pdbs"]
     with open("pairs_clean.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)

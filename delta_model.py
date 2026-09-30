@@ -28,7 +28,7 @@ Both are scored out-of-fold with LEAVE-SITE-OUT CV (no residue appears in both
 train and test) and LEAVE-PROTEIN-OUT CV, with residue-cluster bootstrap CIs
 and a paired delta-AUC test.
 
-Usage: python delta_model.py [--z 2.0]
+Usage: python delta_model.py [--z 2.0] [--prior bfactor|pooled]
 """
 from __future__ import annotations
 import argparse
@@ -213,11 +213,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--z", type=float, default=None,
                     help="mover threshold on |delta|/SE (default: pairs.Z_MOVER)")
+    ap.add_argument("--prior", choices=("bfactor", "pooled"), default=None,
+                    help="noise-floor sigma prior (default: pairs.PRIOR)")
     args = ap.parse_args()
 
-    from pairs import load_proteins, Z_MOVER
+    from pairs import load_proteins, Z_MOVER, PRIOR
     zthr = args.z if args.z is not None else Z_MOVER
-    data = load_proteins()
+    prior = args.prior or PRIOR
+    data = load_proteins(prior)
     rows = [x for rs, _ in data.values() for x in rs]
     for name, (rs, diag) in data.items():
         print(f"{name:16s} mutations={diag.get('mutations', 0):4d} "
@@ -248,7 +251,7 @@ def main():
 
     os.makedirs("results", exist_ok=True)
     with open("results/delta_model.json", "w") as fh:
-        json.dump(dict(z_threshold=zthr, n=len(y), movers=int(y.sum()),
+        json.dump(dict(z_threshold=zthr, prior=prior, n=len(y), movers=int(y.sum()),
                        results=results, contrasts=contrasts), fh, indent=1)
     print("\nwrote results/delta_model.json")
 

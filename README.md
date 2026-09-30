@@ -166,6 +166,7 @@ python summary_figure.py
 python pairs.py                   # -> pairs_clean.csv + per-protein filter diagnostics
 python delta_model.py             # -> results/delta_model.json, delta_model.png
 python delta_model.py --z 3       # sensitivity: stricter mover threshold
+python delta_model.py --prior pooled  # sensitivity: old single-sigma noise-floor prior
 
 python -m pytest tests/           # offline synthetic tests (no network)
 ```
@@ -184,7 +185,7 @@ An audit of the Gate 1–5 pipeline found problems that bear on the headline con
 * **Engine.** Gate 2 regressed *absolute* bending (RMSE ~30°) and differenced two predictions to find changes with a median of ~2.7°. A tree ensemble returns exactly 0 unless a split touches the mutated position. The engine could not see the effect even if the information were there, so Gates 2–5 do not show that local sequence *lacks* the information.
 * **Features.** In the existing T4L labels, site identity explains ~60% of |Δ| variance. A same-site diagnostic (not a valid predictor) reaches AUC 0.60, against 0.52 for the model. Where a mutation sits matters more than what it is, and the model had no site features.
 
-`pairs.py` rebuilds the labels per SPEC §2.2–2.4. It applies a resolution cut (≤2.5 Å), compares each mutant only with WT crystals of the same crystal form, drops mutant crystals whose ligands near the window differ from the form's WT, and aggregates to one row per mutation. The noise floor is shrunk toward the pooled value, and the mover threshold is a z-test on the median difference. `delta_model.py` then predicts movers directly from **site** features (SS, B-factor, burial, contacts, WT bend) and **substitution** features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial). It uses leave-site-out and leave-protein-out CV. The decisive test is the paired ΔAUC of *site+substitution* over *site*: does the substitution identity add anything once the site is known?
+`pairs.py` rebuilds the labels per SPEC §2.2–2.4. It applies a resolution cut (≤2.5 Å), compares each mutant only with WT crystals of the same crystal form, drops mutant crystals whose ligands near the window differ from the form's WT, and aggregates to one row per mutation. The noise floor is shrunk toward a prior that depends on window B-factor (flexible windows are noisier), and the mover threshold is a z-test on the median difference. `delta_model.py` then predicts movers directly from **site** features (SS, B-factor, burial, contacts, WT bend) and **substitution** features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial). It uses leave-site-out and leave-protein-out CV. The decisive test is the paired ΔAUC of *site+substitution* over *site*: does the substitution identity add anything once the site is known?
 
 Both are covered by offline synthetic tests (`tests/`). Full numbers and robustness checks are in `RESULTS.md` (v2 section).
 
@@ -192,13 +193,13 @@ Both are covered by offline synthetic tests (`tests/`). Full numbers and robustn
 
 | model (logistic regression) | leave-site-out AUC | leave-protein-out AUC |
 |---|---|---|
-| site | 0.62 [0.53, 0.70] | 0.63 [0.53, 0.70] |
-| substitution | 0.53 [0.46, 0.60] | 0.54 [0.46, 0.61] |
-| site + substitution | 0.62 [0.53, 0.70] | 0.60 [0.50, 0.67] |
+| site | 0.64 [0.55, 0.72] | 0.65 [0.56, 0.72] |
+| substitution | 0.52 [0.45, 0.59] | 0.57 [0.50, 0.64] |
+| site + substitution | 0.62 [0.53, 0.70] | 0.63 [0.54, 0.70] |
 
-* **Substitution identity adds nothing once the site is known.** Paired ΔAUC (site+subst − site) = +0.001 [−0.04, +0.05]. It stays within ±0.01 at every label definition we tried (z>2 or z>3, with or without σ shrinkage). This is the local-sequence question asked directly, with an engine that can see a Δ, and the answer is still no.
-* **Where the mutation sits carries a weak signal.** The main drivers are window B-factor, non-local contacts and WT bend. The signal is fragile, though. Without σ shrinkage, 6 extra movers appear and site AUC falls to 0.54 [0.45, 0.63]. At z>3 it is 0.73 with shrinkage but 0.59 without. B-factor correlates with the WT noise floor (Spearman ρ = 0.51), so part of the site signal may be noise-floor structure rather than real movement.
-* The gradient-boosting variants overfit at this sample size (site-only AUC 0.42, below chance). Their "significant" paired ΔAUC comes from that broken baseline, not from the substitution features.
+* **Substitution identity adds nothing once the site is known.** Paired ΔAUC (site+subst − site) = −0.02 [−0.06, +0.02]. Under all eight label definitions tried (z>2 or z>3; noise-floor prior pooled, B-factor, B-factor + WT bend, or none) it is ≤ +0.01 with CIs spanning 0. This is the local-sequence question asked directly, with an engine that can see a Δ, and the answer is still no.
+* **Where the mutation sits carries a modest signal.** The main drivers are WT window bend (straighter windows move more), window B-factor and non-local contacts. A B-factor-conditioned noise floor removes the obvious confound (B correlates with WT noise, ρ = 0.51), and the signal stays. Adding WT bend to the prior as well weakens it to 0.60 [0.50, 0.69] at z>2 (0.68 at z>3). More proteins would be needed to separate flexibility-driven noise from flexibility-driven movement.
+* Gradient boosting overfits at this sample size, so the tables report logistic regression. Details and all robustness checks are in `RESULTS.md`.
 
 ---
 

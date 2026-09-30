@@ -155,7 +155,7 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 2. *Engine.* Predict-absolute-then-difference has ~30° resolution against a ~2.7° effect, so its null says little about local sequence.
 3. *Missing features.* On `feasibility_t4l.csv`, site identity has η² = 0.60 for |Δ| (≈0.28 expected by chance with 69 sites). A leave-one-out same-site diagnostic gets AUC 0.60, against the model's 0.52.
 
-**What v2 does.** It keeps a mutant only when both sides are ≤2.5 Å. It uses a same-crystal-form WT reference and excludes mutant crystals whose ligand state near the window differs from the form's WT. It aggregates to one row per mutation. The floor is σ shrunk toward the pooled value (k = 4), with SE = 1.2533·σ·√(1/m + 1/n), and mover := |Δ|/SE > 2. The model is logistic regression or shallow gradient boosting on site and substitution features. Evaluation is leave-site-out (5-fold × 5 repeats) and leave-protein-out, with residue-cluster bootstrap CIs and a paired ΔAUC of site+subst over site.
+**What v2 does.** It keeps a mutant only when both sides are ≤2.5 Å. It uses a same-crystal-form WT reference and excludes mutant crystals whose ligand state near the window differs from the form's WT. It aggregates to one row per mutation. The floor is σ shrunk (k = 4 pseudo-crystals) toward a B-factor-conditioned prior. Within each crystal form, log σ is regressed on the window's WT B-factor (z within chain), with SE = 1.2533·σ·√(1/m + 1/n), and mover := |Δ|/SE > 2. The model is logistic regression or shallow gradient boosting on site and substitution features. Evaluation is leave-site-out (5-fold × 5 repeats) and leave-protein-out, with residue-cluster bootstrap CIs and a paired ΔAUC of site+subst over site.
 
 **Tests.** Unit and synthetic end-to-end tests pass (`python -m pytest tests/`). They cover the parser against `parse_ca`, form matching, ligand exclusion, aggregation, the resolution cut, AUC equivalence, a planted-signal recovery and a null check.
 
@@ -166,41 +166,47 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 | protein | structures | dropped: resolution | dropped: ligand mismatch (mutant crystals) | variant-forms with no clean crystal / no WT floor | clean mutations | movers |
 |---|---|---|---|---|---|---|
 | T4L | 618 | 19 | 112 | 42 / 17 | 113 | 36 |
-| human lysozyme | 213 | 3 | 13 | 8 / 38 | 94 | 29 |
-| RNase A | 323 | 8 | 10 | 10 / 6 | 13 | 7 |
-| barnase | 51 | 7 | 0 | 0 / 5 | 15 | 3 |
+| human lysozyme | 213 | 3 | 13 | 8 / 38 | 94 | 30 |
+| RNase A | 323 | 8 | 10 | 10 / 6 | 13 | 5 |
+| barnase | 51 | 7 | 0 | 0 / 5 | 15 | 4 |
 | SNase | 290 | 8 | — | — / 92 | 0 | 0 (1 WT crystal) |
 
 T4L falls from 248 window rows to 113 mutations. The drop comes mostly from ligand soaks (the L99A series) and from aggregating to one row per mutation. The T4L mover rate (32%) is close to Gate 1's 29%, so the phenomenon survives clean labelling. Pooled: 235 mutations, 75 movers (|z|>2), 121 sites, 4 proteins.
 
-*Delta model* (90% residue-cluster bootstrap CIs):
+*Noise-floor prior.* The first real-data run shrank every window's σ toward one pooled σ. Window B-factor correlates with the raw WT σ (Spearman ρ = 0.51), so that pulled flexible windows' σ down, inflated their z, and could manufacture a B-factor → mover association. The default prior is now heteroscedastic (`pairs.PRIOR = "bfactor"`, `fit_sigma_prior`). The fitted slope is positive in every crystal form: 0.30 for T4L and 0.09–0.59 elsewhere, in log σ per 1 SD of B. `--prior pooled` reproduces the old labels. Mover counts barely move: 4 of 235 labels flip at z>2 (two high-B movers lost, two low-B gained), and 6 at z>3.
+
+*Delta model* (B-factor prior, 90% residue-cluster bootstrap CIs):
 
 | features | model | leave-site-out AUC | leave-protein-out AUC |
 |---|---|---|---|
-| site | logreg | 0.620 [0.53, 0.70] | 0.626 [0.53, 0.70] |
-| subst | logreg | 0.531 [0.46, 0.60] | 0.539 [0.46, 0.61] |
-| site+subst | logreg | 0.621 [0.53, 0.70] | 0.596 [0.50, 0.67] |
-| site | hgb | 0.423 [0.34, 0.50] | 0.418 [0.34, 0.49] |
-| subst | hgb | 0.471 [0.40, 0.56] | 0.574 [0.51, 0.63] |
-| site+subst | hgb | 0.511 [0.44, 0.58] | 0.536 [0.45, 0.61] |
+| site | logreg | 0.641 [0.55, 0.72] | 0.650 [0.56, 0.72] |
+| subst | logreg | 0.522 [0.45, 0.59] | 0.573 [0.50, 0.64] |
+| site+subst | logreg | 0.619 [0.53, 0.70] | 0.625 [0.54, 0.70] |
+| site | hgb | 0.529 [0.45, 0.60] | 0.519 [0.44, 0.59] |
+| subst | hgb | 0.511 [0.44, 0.59] | 0.608 [0.55, 0.67] |
+| site+subst | hgb | 0.562 [0.49, 0.63] | 0.565 [0.49, 0.63] |
 
-Paired ΔAUC, site+subst − site: logreg +0.001 [−0.04, +0.05] (site-out) and −0.029 [−0.08, +0.02] (protein-out). The hgb contrasts (+0.09, +0.12, CIs above 0) are **not** evidence for substitution. Site-only hgb scores below chance (overfitting with n = 235), so these contrasts measure a broken baseline. Site+subst hgb is itself at chance.
+Paired ΔAUC, site+subst − site (logreg): −0.022 [−0.06, +0.02] site-out and −0.025 [−0.07, +0.02] protein-out. With the pooled prior, site-only hgb scored below chance (0.42) and produced spurious "significant" hgb contrasts. Under the B-factor prior those contrasts are +0.03 and +0.05, with CIs spanning 0. Gradient boosting is still not usable at n = 235, so the tables report logreg.
 
 *Robustness checks* (leave-site-out logreg; scratch analysis, not a committed script):
 
-| mover label | movers | site AUC | ΔAUC site+subst − site |
-|---|---|---|---|
-| shrunk σ, z>2 (default) | 75 | 0.62 [0.52, 0.69] | +0.002 [−0.04, +0.05] |
-| raw σ, z>2 | 81 | 0.54 [0.45, 0.63] | +0.006 [−0.05, +0.07] |
-| shrunk σ, z>3 | 40 | 0.73 [0.65, 0.79] | −0.009 [−0.05, +0.03] |
-| raw σ, z>3 | 46 | 0.59 [0.51, 0.66] | −0.005 [−0.06, +0.05] |
+| noise-floor prior | mover label | movers | site AUC | ΔAUC site+subst − site |
+|---|---|---|---|---|
+| **B-factor (default)** | z>2 | 75 | 0.645 [0.55, 0.72] | −0.022 [−0.06, +0.02] |
+| B-factor | z>3 | 38 | 0.704 [0.63, 0.78] | −0.023 [−0.07, +0.02] |
+| B-factor + WT bend | z>2 | 74 | 0.601 [0.50, 0.69] | −0.027 [−0.07, +0.02] |
+| B-factor + WT bend | z>3 | 39 | 0.679 [0.60, 0.76] | −0.005 [−0.05, +0.04] |
+| pooled (first run) | z>2 | 75 | 0.620 [0.53, 0.70] | +0.001 [−0.04, +0.05] |
+| pooled | z>3 | 40 | 0.727 [0.65, 0.79] | −0.009 [−0.05, +0.03] |
+| none (raw σ) | z>2 | 81 | 0.547 [0.45, 0.63] | +0.002 [−0.05, +0.06] |
+| none (raw σ) | z>3 | 46 | 0.59 [0.51, 0.66] | −0.005 [−0.06, +0.05] |
 
-Within-protein site AUCs are similar to the pooled value (T4L 0.59, human lysozyme 0.68, RNase A 0.60 at z>2), so the pooled number is not just between-protein base rates. Leave-protein-out agrees with leave-site-out.
+Within-protein site AUCs under the B-factor prior (z>2) are T4L 0.61, human lysozyme 0.70 and RNase A 0.71. The pooled number is therefore not just between-protein base rates, and leave-protein-out agrees with leave-site-out. The strongest site features are WT window bend (standardized coefficient −0.67; straighter windows move more), window B-factor (+0.38) and non-local contacts (+0.35). The out-of-fold site score also ranks the threshold-free |Δ| in degrees: Spearman 0.30 [0.14, 0.43].
 
 **Reading.**
-1. *Substitution identity adds nothing once the site is known.* This holds under every label definition above. It is the local-sequence question asked with an engine that predicts Δ directly, so it closes the "the engine couldn't see it" loophole in Gates 2–5.
-2. *Site context carries a weak, fragile signal.* The largest standardized coefficients are WT bend (−0.56), window B-factor (+0.39) and non-local contacts (+0.35). Moving a handful of borderline labels (6 of 235) shifts the AUC by ~0.08. Window B-factor correlates with the raw WT floor σ (Spearman ρ = 0.51), so part of the signal may be noise-floor structure rather than mutation-driven movement. A heteroscedastic floor, shrinking toward a B-factor-conditioned prior instead of one pooled σ, is the obvious next fix before the site signal is claimed.
-3. Gradient boosting is not usable at this n. Report logreg.
+1. *Substitution identity adds nothing once the site is known.* ΔAUC is ≤ +0.01 with CIs spanning 0 under all eight label definitions. This is the local-sequence question asked with an engine that predicts Δ directly, so it closes the "the engine couldn't see it" loophole in Gates 2–5.
+2. *Site context carries a modest signal, and the B-factor confound does not explain it.* Conditioning the prior on B removes movers where B is high, yet site AUC rises slightly (0.62 → 0.64). One residual caveat: WT bend, the strongest feature, also correlates with raw σ (ρ = −0.44). Adding it as a second prior covariate lowers site AUC to 0.60 [0.50, 0.69] at z>2, with the CI touching chance, and to 0.68 [0.60, 0.76] at z>3. Straight windows are both noisier and more mutation-sensitive, and with 4 proteins these cannot be fully separated. Raw σ without shrinkage gives the weakest signal, but it is also the noisiest label (few-crystal MADs), so it does not settle the question.
+3. The honest v2 claim: **"where" weakly predicts movers (AUC ~0.60–0.70 depending on the label), "what" adds nothing.** More proteins with ≥3 WT crystals per form would be needed to separate flexibility-driven noise from flexibility-driven movement.
 
 ## Methodological notes worth highlighting
 
@@ -241,5 +247,7 @@ Within-protein site AUCs are similar to the pooled value (T4L 0.59, human lysozy
 > of heavy structure-based methods, not a light interpretable local model.
 >
 > **v2 update (clean labels, delta-targeted model):** substitution identity adds nothing
-> over site context (paired ΔAUC +0.001 [−0.04, +0.05]); site context alone reaches
-> AUC 0.62 [0.53, 0.70], but that signal is fragile to the noise-floor definition.
+> over site context (paired ΔAUC −0.02 [−0.06, +0.02]); site context alone reaches
+> AUC 0.64 [0.55, 0.72] with a B-factor-conditioned noise floor. That signal survives
+> removing the B-factor confound, but only barely clears chance once WT bend also
+> enters the prior (0.60 [0.50, 0.69]).
