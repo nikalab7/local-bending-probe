@@ -81,6 +81,8 @@ SITE = ["ss_H", "ss_E", "ss_L", "b_site", "b_window", "n_ca10", "hse_up",
 SUBST = ["d_vol", "abs_d_vol", "d_hyd", "d_charge", "to_P", "from_P", "to_G",
          "from_G", "blosum62", "cavity", "d_hyd_x_burial"]
 SS = ["ss_H", "ss_E", "ss_L"]
+ESM_WHERE = ["esm_entropy", "esm_wt_logp"]       # plm_features.py (optional)
+ESM_WHAT = ["esm_llr"]
 FEATURE_SETS = {
     "ss": SS,
     "site": SITE,                                    # C-alpha "where" (v2/v3)
@@ -88,12 +90,16 @@ FEATURE_SETS = {
     "site+subst": SITE + SUBST,
     "where": SITE + CONTEXT,                         # + full-atom site context
     "where+what": SITE + CONTEXT + SUBST + INTERACT,  # + substitution x context
+    "site+esm_where": SITE + ESM_WHERE,              # + evolutionary site context
+    "site+esm": SITE + ESM_WHERE + ESM_WHAT,         # + evolutionary "what given where"
 }
 # paired contrasts (base, richer, name)
 CONTRASTS = [("site", "site+subst", "subst_over_site"),   # context-free "what" over "where"
              ("ss", "site", "site_over_ss"),              # is "where" more than SS?
              ("site", "where", "context_over_site"),      # does full-atom context help?
-             ("where", "where+what", "what_over_where")]  # "what given where" over "where"
+             ("where", "where+what", "what_over_where"),  # "what given where" over "where"
+             ("site", "site+esm_where", "esm_where_over_site"),
+             ("site+esm_where", "site+esm", "esm_what_over_where")]
 HGB_SETS = ("site", "where", "where+what")             # boosting only where informative
 FAMILY_FOLDS = 10
 
@@ -147,6 +153,8 @@ def featurize(rows):
     """Site + substitution features; full-atom CONTEXT/INTERACT when the row
     carries its scaffold file (pairs rows do), NaN otherwise (imputed)."""
     import structure_features
+    import plm_features
+    esm_lp = plm_features.load()
     F = []
     for x in rows:
         sf = site_features(x["scaffold_res"], x["r"], x["s"], x["scaffold_ss"], x["wt_bend"])
@@ -155,12 +163,14 @@ def featurize(rows):
             f.update(structure_features.row_features(x))
         else:
             f.update({k: np.nan for k in CONTEXT + INTERACT})
+        f.update(plm_features.features(esm_lp.get((x["protein"], x["r"])), x["wt"], x["mut"]))
         F.append(f)
     return F
 
 
 def matrix(F, cols):
-    return np.array([[f[c] for c in cols] for f in F], float)
+    """Feature matrix; a feature absent from a row (optional inputs) is NaN."""
+    return np.array([[f.get(c, np.nan) for c in cols] for f in F], float)
 
 
 # ------------------------------- models / CV ---------------------------------
@@ -217,6 +227,8 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
     results, preds = {}, {}
     for name, cols in feature_sets.items():
         X = matrix(F, cols)
+        if np.isnan(X).all(axis=0).any():          # e.g. ESM features not computed
+            continue
         for kind in kinds:
             if kind == "hgb" and name not in HGB_SETS:
                 continue
@@ -321,6 +333,26 @@ def noise_decomposition(F, y, groups, Fn, yn, gn, cols, k=5, seed=0):
     return out
 
 
+def plot(results, n, movers, path="delta_model.png"):
+    """Leave-site-out AUC per feature set / model (also: python -c "import delta_model as d,
+    json; r=json.load(open('results/delta_model.json')); d.plot(r['results'], r['n'], r['movers'])")."""
+    import matplotlib; matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    keys = [k for k in results if "leave_site_out" in results[k]]
+    fig, ax = plt.subplots(figsize=(9.0, 4.8))
+    for i, k in enumerate(keys):
+        m = results[k]["leave_site_out"]
+        ax.errorbar(i, m["auc"], yerr=[[m["auc"] - m["lo"]], [m["hi"] - m["auc"]]],
+                    fmt="o", capsize=5, color="#4C78A8" if "logreg" in k else "#F58518")
+    ax.axhline(0.5, color="#E45756", ls="--", lw=1.2, label="chance")
+    ax.set_xticks(range(len(keys)))
+    ax.set_xticklabels(keys, rotation=30, ha="right", fontsize=8)
+    ax.set_ylabel("leave-site-out AUC (90% CI)")
+    ax.set_title(f"Delta model on clean labels (n={n}, movers={movers}); blue = logreg, orange = boosting")
+    ax.legend(); fig.tight_layout(); fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
 # ---------------------------------- main -------------------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -396,19 +428,7 @@ def main():
                        noise_decomposition=decomp), fh, indent=1)
     print("\nwrote results/delta_model.json")
 
-    import matplotlib; matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(7.4, 4.4))
-    keys = [k for k in results if "leave_site_out" in results[k]]
-    for i, k in enumerate(keys):
-        m = results[k]["leave_site_out"]
-        ax.errorbar(i, m["auc"], yerr=[[m["auc"] - m["lo"]], [m["hi"] - m["auc"]]],
-                    fmt="o", capsize=5, color="#4C78A8" if "logreg" in k else "#F58518")
-    ax.axhline(0.5, color="#E45756", ls="--", lw=1.2, label="chance")
-    ax.set_xticks(range(len(keys))); ax.set_xticklabels(keys, rotation=20, fontsize=8)
-    ax.set_ylabel("leave-site-out AUC (90% CI)")
-    ax.set_title(f"Delta model on clean labels (n={len(y)}, movers={int(y.sum())})")
-    ax.legend(); fig.tight_layout(); fig.savefig("delta_model.png", dpi=130)
+    plot(results, len(y), int(y.sum()))
     print("plot -> delta_model.png")
 
 
