@@ -40,8 +40,12 @@ rows. This module fixes the labels:
                   error of a median-vs-median difference:
                       SE = sigma * sqrt(e_m^2 / m + e_n^2 / n)
                   with e_k = sd(median of k) * sqrt(k) / sigma (1 for k <= 2,
-                  -> 1.2533 for large k), and mover := |delta| / SE > Z_MOVER.
-                  pairs.null_rows checks the false-positive rate empirically.
+                  -> 1.2533 for large k). delta / SE is mapped from a Student-t
+                  with n - 1 + SHRINK_K degrees of freedom onto the normal scale
+                  (Z_CALIB = "t": sigma from few crystals is itself uncertain),
+                  and mover := |z| > Z_MOVER. pairs.null_rows / diagnostics.py
+                  check the false-positive rate empirically: 2.4% overall and
+                  <= 4.9% in every n_wt bin (nominal 4.6%).
   6. WT LIGANDS   the ligand rule applies to the WT reference too: a WT crystal
                   whose het groups near a window differ from the form's typical
                   set is left out of that window's median and sigma, as long as
@@ -66,6 +70,11 @@ SHRINK_K = 4           # pseudo-crystals of prior sigma added to each window
 PRIOR = "bfactor"      # sigma prior: "bfactor" (log-linear in window B) | "pooled"
 PRIOR_MIN_WINDOWS = 10 # fewer usable windows in a form -> fall back to pooled
 Z_MOVER = 2.0
+# z calibration for the uncertainty of sigma: "t" maps delta/SE through a
+# Student-t with nu = n - 1 + SHRINK_K (the prior acts as SHRINK_K pseudo-
+# crystals) onto the normal scale, so |z| > Z_MOVER means the same tail
+# probability for a 3-crystal and a 30-crystal floor; "none" keeps delta/SE.
+Z_CALIB = "t"
 LIG_CUTOFF = 8.0       # Angstrom, het atom to any window C-alpha
 LIG_TYPICAL = 0.5      # het present in >= this fraction of form-WT = "normal"
 MED_EFF = 1.2533       # sd(median) / sd(mean) for normal data, large samples
@@ -409,6 +418,15 @@ def typical_hets(structs, wts, s):
     return {k for k, v in c.items() if v >= LIG_TYPICAL * len(wts)}
 
 
+def calibrated_z(t_stat, n):
+    """delta/SE -> normal-scale z with the same two-sided tail under t(n - 1 + K)."""
+    if Z_CALIB != "t":
+        return float(t_stat)
+    from scipy.stats import norm, t as student_t
+    p = max(2.0 * student_t.sf(abs(t_stat), n - 1 + SHRINK_K), 1e-300)
+    return float(np.sign(t_stat) * norm.isf(p / 2.0))
+
+
 def label(W, s, bends):
     """(delta, se, z, sigma, sigma_prior) of mutant bends vs form stats W at window s."""
     wt_med, sig_hat, n, _ = W["per"][s]
@@ -417,7 +435,7 @@ def label(W, s, bends):
     m = len(bends)
     se = float(sig * np.sqrt(med_eff(m) ** 2 / m + med_eff(n) ** 2 / n))
     delta = float(np.median(bends)) - wt_med
-    return delta, se, delta / se, sig, sig_prior
+    return delta, se, calibrated_z(delta / se, n), sig, sig_prior
 
 
 # ------------------------------ pair builder --------------------------------
@@ -536,7 +554,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
             n_wt=n, n_mut=m, wt_bend=wt_med, sigma=sig, sigma_raw=sig_hat,
             sigma_prior=sig_prior, b_window_wt=bw_wt,
             delta=delta, se=se, z=float(z),
-            mover=bool(abs(delta) > Z_MOVER * se),
+            mover=bool(abs(z) > Z_MOVER),
             res_mut=float(np.median([structs[p]["resolution"] for p in used])),
             pdbs=sorted(used), scaffold=scaffold,
             scaffold_res=structs[scaffold]["res"],

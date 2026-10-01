@@ -467,3 +467,18 @@ def test_within_protein_auc_ignores_base_rates():
     score = (strata == "P").astype(float) + 1e-3 * rng.normal(size=400)   # protein identity only
     assert fast_auc(y, score) > 0.7
     assert abs(within_auc(y, score, strata) - 0.5) < 0.1
+
+
+def test_calibrated_z_t_to_normal():
+    """Few WT crystals -> heavier t tails -> the same delta/SE maps to a smaller |z|;
+    many crystals -> identity; sign and order preserved."""
+    assert abs(pairs.calibrated_z(2.0, 10 ** 6) - 2.0) < 1e-3
+    small, big = pairs.calibrated_z(2.5, 3), pairs.calibrated_z(2.5, 30)
+    assert small < big < 2.5
+    assert pairs.calibrated_z(-2.5, 3) == -small
+    zs = [pairs.calibrated_z(v, 5) for v in (0.5, 1.0, 2.0, 3.0, 8.0)]
+    assert zs == sorted(zs)
+    # tail probability preserved: P(|t_nu| > t) == P(|N| > z)
+    from scipy.stats import norm, t as student_t
+    nu = 3 - 1 + pairs.SHRINK_K
+    assert abs(2 * norm.sf(small) - 2 * student_t.sf(2.5, nu)) < 1e-9
