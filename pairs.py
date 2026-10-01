@@ -13,6 +13,10 @@ rows. This module fixes the labels:
                   and hinge state are held constant.
   3. LIGANDS      a mutant crystal whose het groups near the window differ from
                   what WT crystals of that form typically carry is excluded.
+                  Common crystallization additives (ADDITIVES: SO4, GOL, BME,
+                  EDO, ...; metals excluded) are ignored in that comparison:
+                  they alone dropped ~150 clean mutations, and ignoring them
+                  leaves the WT-vs-WT null calibration unchanged (3.1 vs 3.2%).
   4. AGGREGATION  one row per MUTATION: median bending over its crystals (the
                   form with the most crystals is used), not one row per PDB entry.
   5. NOISE FLOOR  per-window WT sigma = sample SD / c4(n) (unbiased). The first
@@ -90,7 +94,7 @@ WATER = {"HOH", "DOD", "WAT", "H2O"}
 ADDITIVES = frozenset("""SO4 PO4 CL NA K BR IOD NO3 SCN NH4 GOL EDO PEG PGE PG4 1PE P6G
     PE4 PE5 2PE 12P 15P ACT ACY FMT BME HED DMS MPD MRD TRS EPE MES IMD IPA EOH MOH
     MLI TAR BU3 CAC CXS PGO DIO BTB B3P""".split())
-IGNORE_ADDITIVES = False
+IGNORE_ADDITIVES = True
 
 THREE2ONE = {
     'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C', 'GLN': 'Q',
