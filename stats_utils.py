@@ -91,6 +91,30 @@ def paired_delta_auc(y, score_a, score_b, clusters, n_boot=N_BOOT, seed=0,
     return float(delta), float(lo), float(hi), float((d <= 0).mean())
 
 
+def within_auc(y, score, strata):
+    """AUC over mover/non-mover pairs from the SAME stratum (e.g. protein) only."""
+    y = np.asarray(y, bool); score = np.asarray(score, float); strata = np.asarray(strata)
+    num = den = 0.0
+    for k in np.unique(strata):
+        m = strata == k
+        npos = int(y[m].sum()); nneg = int(m.sum()) - npos
+        if npos and nneg:
+            num += fast_auc(y[m], score[m]) * npos * nneg
+            den += npos * nneg
+    return num / den if den else float("nan")
+
+
+def within_auc_ci(y, score, strata, clusters, n_boot=1000, seed=0, level=0.90):
+    """within_auc + cluster-bootstrap CI. Returns (auc, lo, hi)."""
+    y = np.asarray(y, bool); score = np.asarray(score, float); strata = np.asarray(strata)
+    auc = within_auc(y, score, strata)
+    b = [within_auc(y[bi], score[bi], strata[bi]) for bi in _resamples(clusters, n_boot, seed)]
+    b = [v for v in b if np.isfinite(v)]
+    a = (1 - level) / 2 * 100
+    lo, hi = np.percentile(b, [a, 100 - a]) if b else (float("nan"), float("nan"))
+    return float(auc), float(lo), float(hi)
+
+
 # ------------------------------ manifests -----------------------------------
 def pinned_ids(name, fetch_fn):
     """Return a pinned PDB-ID list; query RCSB (fetch_fn) only on first run.
