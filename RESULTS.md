@@ -223,6 +223,10 @@ The bend signal lives *within* SS classes, so it is not a proxy for SS. What rem
 
 ## v3 — systematic miner (`mine_pairs.py`): 191 proteins, 158 families
 
+> The v3 labels used an uncorrected MAD noise floor. The v4 audit below found that it
+> made the z test liberal in forms with few WT crystals, and v4 supersedes the v3
+> numbers. The miner and the family definition are unchanged.
+
 **Why.** v2 had 4 usable proteins. That was too few to tell apart two explanations of the site signal: windows that are noisy in WT, or windows that really move on mutation. SPEC §2.1's primary source (RCSB + SIFTS) removes that limit.
 
 **How.**
@@ -273,6 +277,111 @@ The coefficients differ between the two fits. Non-local contacts carry movement:
 2. *"Where" has a small, real edge.* Site features beat SS by +0.085 (family-out), and SS alone is at chance. A noise-only score reaches AUC 0.555 on real labels, which is more than half of the site model's margin above chance (0.593). The movement-specific remainder is ΔAUC ≈ +0.05 [+0.01, +0.08], carried mainly by non-local contacts, consistent with the tertiary-packing reading of Gate 5.
 3. Neither is a usable predictor: the best AUC is ≈ 0.60. The v2 single-series numbers (0.64, or 0.60 after WT-bend correction) were within noise of this pooled estimate.
 
+## v4 — audit: label calibration, reliability ceiling, richer features
+
+**Why.** Before reaching for a better model, check two things. Are the labels calibrated? And how much accuracy can these labels support at all?
+
+### Issues found and fixed
+
+| issue | evidence | fix |
+|---|---|---|
+| Noise floor biased low at small n | σ = 1.4826 × MAD has no finite-sample correction. That gives 0.67σ on average at n = 3 and 0.54σ at the median. On the WT-vs-WT null, 17–20% of pseudo-mutants were "movers" in forms with 3–4 WT crystals (overall 6.9%; nominal 4.6%). | σ = SD / c4(n), which is unbiased. Corrected MAD and Qn remain as options (`SIGMA_EST`). |
+| Robust scale vs mixed WT states | With the bias corrected, MAD and Qn still give 5.4–7.3% and 5.9% null false positives, against 3.1–4.0% for SD. The null z has sd 1.4–1.7 but robust sd 0.65–0.8 (heavy tails), a mixture: most WT crystals of a form agree and a few sit in another conformation. A robust scale ignores that minority, and a mutant crystal in the minority state then reads as a mover. | SD by default. Its errors are conservative. |
+| SE used the asymptotic median efficiency for every m | 1.2533 overstates the SE of a single crystal (m = 1, 85% of rows). Large-n forms ran at 2% false positives. | Exact small-sample efficiency table, `med_eff(k)`. |
+| σ itself is uncertain at small n | Even unbiased, σ from 3–9 crystals leaves z with t-like tails: 5.9–7.8% null false positives in those bins. | δ/SE is mapped through a Student-t with n − 1 + K degrees of freedom onto the normal scale (`Z_CALIB = "t"`). |
+| Ligand rule applied only to mutants | WT reference crystals with a ligand next to the window entered the median and σ. | Rule applied to WT too when ≥ 3 clean crystals remain (`WT_LIG_FILTER = "prefer"`). The scaffold is taken from the typical ligand state. |
+| Additives counted as ligands | Of 1268 dropped mutant crystals, about 190 failed only on SO4, Cl⁻, glycerol, BME, EDO and similar. Real ligands (CMO/NO in myoglobin, UMP, benzene soaks) are a different, legitimate group. | Common additives are ignored by the rule; metals are not (`ADDITIVES`). The 884 null pseudo-pairs this adds have *fewer* false positives (3.1% vs 3.9%), so additives do not create noise. |
+
+Checked and fine:
+- *Within-protein:* the signal is site-level, not between-protein base rates. Within-protein AUC is higher than pooled (0.65 vs 0.60).
+- *Bootstrap level:* CIs are the same whether sites, proteins or families are resampled.
+- *Fold leakage:* buffering ±4 residues between train and test sites changes leave-site-out AUC by 0.005, so overlapping windows do not leak.
+
+**Calibration after the fixes** (`diagnostics.py`, 3573 WT-vs-WT pseudo-pairs):
+
+| WT crystals behind the floor | 2–4 | 5–9 | 10–19 | 20+ | all |
+|---|---|---|---|---|---|
+| null false positives, first v3 labels | 17.1% | 12.2% | 4.5% | 2.1% | 6.9% |
+| null false positives, v4 labels | 3.5% | 4.9% | 1.3% | 2.0% | **2.4%** |
+| real mutations called movers, v4 | 17.9% | 33.0% | 32.6% | 27.3% | 26.5% |
+
+### v4 labels
+
+| structures | dropped: resolution | dropped: ligand mismatch (mutant crystals) | variant-forms with no clean crystal / no WT floor | clean mutations | movers | sites | proteins | families |
+|---|---|---|---|---|---|---|---|---|
+| 7612 | 45 | 1006 | 480 / 271 | 1045 | 277 (26.5%) | 712 | 207 | 166 |
+
+By secondary structure: helix 23.9% (126/527), strand 34.3% (69/201), loop 25.9% (82/317), χ² p = 0.017. Loops are again not enriched (loop vs rest p = 0.82). 85% of the labels come from a single mutant crystal.
+
+### How much accuracy can these labels support? (split-half test-retest)
+
+Each protein's crystals are split at random into two halves, and labels are rebuilt on each half independently. Each seed yields about 70 mutations measured in both halves (3 seeds).
+
+| corr(z_A, z_B) | all-crystal reliability (Spearman–Brown) | mover agreement | κ | P(mover in B \| mover in A) | direction agreement among shared movers | oracle AUC |
+|---|---|---|---|---|---|---|
+| 0.75 | ≈ 0.86 | 72% | 0.37 | 62% | 100% | **0.76** |
+
+"Oracle AUC" is the AUC of |z_B| for predicting mover_A: what a predictor that knew each effect as well as half the data could reach. Each half has one mutant crystal and half the WT floor, which is close to a typical single-crystal label. **Against labels like these, accuracy saturates near AUC 0.75–0.8 whatever the model.** Real movers reproduce (same direction every time), but whether a borderline effect crosses |z| > 2 is close to a coin flip.
+
+### Delta model on v4 labels
+
+90% residue-cluster bootstrap CIs; family-out = 10 folds of whole families; within-protein = only mover/non-mover pairs from the same protein.
+
+| features | model | leave-site-out AUC | leave-family-out AUC | within-protein (family-out) |
+|---|---|---|---|---|
+| SS only | logreg | 0.504 [0.46, 0.55] | 0.523 [0.49, 0.56] | 0.516 |
+| site (C-alpha) | logreg | 0.604 [0.57, 0.64] | 0.596 [0.56, 0.63] | 0.648 |
+| subst | logreg | 0.572 [0.54, 0.61] | 0.570 [0.53, 0.60] | 0.578 |
+| site + subst | logreg | 0.620 [0.58, 0.65] | 0.610 [0.57, 0.65] | 0.653 |
+| where (site + full-atom context) | logreg | 0.583 [0.54, 0.62] | 0.574 [0.53, 0.61] | 0.610 |
+| where + what (+ subst + interactions) | logreg | 0.609 [0.57, 0.64] | 0.606 [0.57, 0.64] | 0.593 |
+| where + what | hgb | 0.613 [0.58, 0.64] | 0.597 [0.56, 0.63] | 0.617 |
+| site + ESM-2 site terms | logreg | 0.597 [0.56, 0.63] | 0.594 [0.56, 0.63] | 0.648 |
+| site + ESM-2 site + substitution LLR | logreg | 0.602 [0.56, 0.64] | 0.597 [0.56, 0.63] | 0.630 |
+
+| paired contrast (logreg) | leave-site-out | leave-family-out |
+|---|---|---|
+| site − SS | +0.099 [+0.06, +0.14] | +0.073 [+0.03, +0.11] |
+| (site + subst) − site | +0.017 [−0.00, +0.04] | +0.014 [−0.01, +0.04] |
+| where − site (full-atom context) | −0.021 [−0.04, −0.00] | −0.023 [−0.04, −0.00] |
+| (where + what) − where | +0.026 [+0.00, +0.05] | +0.032 [+0.01, +0.06] |
+| ESM site terms − nothing (over site) | −0.006 [−0.01, +0.00] | −0.002 [−0.01, +0.00] |
+| ESM substitution LLR − ESM site terms | +0.005 [−0.01, +0.02] | +0.003 [−0.01, +0.01] |
+
+**Null control and decomposition.** The site model trained on the pseudo labels reaches 0.572 leave-site-out and 0.529 family-out on them. As a noise score on the *real* labels it reaches only **0.518 [0.48, 0.55]**. Beyond that noise score, site features add **+0.087 [+0.04, +0.13]** (P = 0.001; v3 found +0.047). Almost all of the site signal is now movement, not noise structure. Standardized coefficients, real vs null labels:
+
+| feature | real movers | null |
+|---|---|---|
+| WT window bend | −0.47 | −0.05 |
+| burial direction (hse_up) | +0.21 | +0.06 |
+| window B-factor | +0.22 | −0.03 |
+| non-local contacts | +0.12 | +0.02 |
+| distance to terminus (log) | +0.03 | +0.32 |
+
+WT bend was partly a noise marker in v3 (−0.24 on the null). With calibrated labels it is movement-specific, which settles the question v2 left open.
+
+### What buys accuracy, what does not (`model_variants.py`, leave-family-out)
+
+| change | AUC | Δ vs logreg baseline |
+|---|---|---|
+| site, logreg (baseline) | 0.597 | — |
+| site, C tuned by nested CV | 0.597 | −0.000 [−0.003, +0.003] |
+| site, ridge on continuous \|z\| | 0.606 | +0.009 [−0.001, +0.020] |
+| site, regularized boosting | 0.583 | −0.014 [−0.047, +0.020] |
+| where + what, logreg (baseline) | 0.607 | — |
+| where + what, ridge on continuous \|z\| | 0.626 | +0.019 [+0.004, +0.034] |
+| where + what, regularized boosting | 0.629 (within-protein 0.691) | +0.021 [−0.011, +0.054] |
+| where + what, ensemble logreg + boosting | **0.630** [0.60, 0.66] | +0.023 [+0.006, +0.040] |
+
+Learning curve (site, logreg): with 25 / 50 / 75 / 100% of training families, family-out AUC is 0.546 / 0.580 / 0.592 / 0.597 (within-protein 0.576 / 0.616 / 0.628 / 0.648). Data still helps but is flattening, about +0.005–0.01 per extra quarter.
+
+**Reading.**
+1. *The labels were the weakest link, and fixing them changed the interpretation more than the AUC.* Pooled AUC barely moved (0.595 → 0.596 for site). But the part of it that is noise fell from 0.555 to 0.518, and the movement-specific part nearly doubled (+0.047 → +0.087).
+2. *"What" carries a small amount of information, but only in context.* Context-free substitution descriptors add +0.014 (n.s.). Substitution × local-structure terms add +0.03 over the full-atom "where", but that "where" is itself 0.02 below the simple site model, so the net gain over site is about +0.01. ESM-2, which scores the substitution from whole-sequence evolutionary context, adds nothing (+0.003). Whatever decides which substitutions bend the backbone is not in sequence-level substitution plausibility.
+3. *Richer site description does not help a linear model.* Full-atom context (φ/ψ, H-bonds, packing, ligand distance, SS position) is largely redundant with the C-alpha site features. Only ligand distance helps on its own (+0.011). The rare physical mechanisms (Gly at positive φ, Pro in a helix) occur in 1% or less of the deposited mutations.
+4. *Accuracy ceiling.* Best model ≈ 0.63 family-out (boosting alone: 0.69 within-protein) against an oracle ≈ 0.76 on single-crystal-like labels. Models now capture roughly half of the achievable margin above chance. Two levers remain for the other half: better labels (replicate mutant crystals; 85% of labels rest on one crystal) and more proteins. The learning curve says the second lever is weak.
+5. The best variant was picked from about 12 (6 learners × 2 feature sets), so 0.630 is slightly optimistic. The pre-specified logreg numbers are the ones to quote.
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°
@@ -301,6 +410,9 @@ The coefficients differ between the two fits. Non-local contacts carry movement:
   window floor inflation).
 - **Single-sequence inputs** (no evolutionary profiles/MSAs); **Cα-only** bending metric;
   **observational** PDB mutants, not designed.
+- **v4:** 85% of the clean labels rest on a single mutant crystal, and split-half
+  reliability puts the achievable AUC near 0.76. The bending metric sees only a
+  5-residue Cα angle; twists and shifts that keep that angle are invisible to it.
 
 ## Bottom line
 
@@ -321,3 +433,9 @@ The coefficients differ between the two fits. Non-local contacts carry movement:
 > nothing (−0.002 [−0.03, +0.02]). "Where" predicts movers at AUC 0.60 [0.56, 0.63]
 > (family hold-out), beyond SS. More than half of that margin is WT-noise structure; the
 > movement-specific part is ΔAUC ≈ +0.05 [+0.01, +0.08], driven by non-local contacts.
+>
+> **v4 update (audited labels: 2.4% null false positives; 1045 mutations, 207 proteins):**
+> the old floor was liberal in few-crystal forms; corrected, the site signal is almost
+> all movement (excess over a noise score +0.087 [+0.04, +0.13]). Substitution identity
+> adds at most ~0.01–0.03, and only as substitution × structure terms; ESM-2 adds nothing.
+> Best model AUC ≈ 0.63 (family hold-out) against a label-reliability ceiling ≈ 0.76.
