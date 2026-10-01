@@ -12,7 +12,7 @@ To answer that, I built a lightweight, interpretable pipeline designed around a 
 
 The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
 
-On 892 clean WT/mutant pairs from 191 proteins, the identity of the substitution adds nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a small signal, and its movement-specific part comes mainly from non-local contacts.
+On 1,045 clean WT/mutant pairs from 207 proteins, the identity of the substitution adds little or nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a modest, real signal: straight, buried windows with non-local contacts move more.
 
 The failure of the local model became the result.
 
@@ -53,12 +53,13 @@ The workflow was:
 4. Mine the PDB systematically for every protein that can supply such pairs.
 5. Predict movers directly from site and substitution features, holding out whole sequence families.
 6. Run a null control on WT-vs-WT pseudo-mutants to separate real movement from noise.
+7. Audit the labels themselves: check the false-positive rate on the null, and measure test-retest reliability to know how much accuracy is achievable at all.
 
 Every stage had a predefined failure condition.
 
 The objective was not to maximize performance but to determine where the predictive information actually resides.
 
-The first version of the pipeline (Gates 1–5, T4 lysozyme plus four validation proteins) is kept for the record. An audit showed its labels and its prediction engine were too weak to support a negative conclusion. The results below come from the rebuilt pipeline (v2/v3; details further down and in `RESULTS.md`).
+The first version of the pipeline (Gates 1–5, T4 lysozyme plus four validation proteins) is kept for the record. An audit showed its labels and its prediction engine were too weak to support a negative conclusion. A second audit (v4) found the rebuilt labels' noise floor too liberal when few WT crystals are available, and fixed it. The results below come from the current pipeline (v4; details further down and in `RESULTS.md`).
 
 ---
 
@@ -66,9 +67,9 @@ The first version of the pipeline (Gates 1–5, T4 lysozyme plus four validation
 
 The phenomenon itself is real.
 
-Across 191 proteins, 37.6% of clean single mutations (335/892) moved the backbone beyond |z| > 2 of the per-window noise floor. When held-out WT crystals are scored the same way as pseudo-mutants, only 6.9% cross that threshold. Mutations do move protein backbones.
+Across 207 proteins, 26.5% of clean single mutations (277/1045) moved the backbone beyond |z| > 2 of the per-window noise floor. Held-out WT crystals scored the same way as pseudo-mutants cross that threshold only 2.4% of the time, and no more than 4.9% in any group of crystal forms. Mutations do move protein backbones.
 
-The first T4 lysozyme run found 29% (72/248). That run also reported more movers in loops than in helices (48% vs 25%, one-sided Fisher p = 0.041). **That enrichment does not replicate on the clean pooled labels:** loops 37.3% (107/287), all other residues 37.7% (228/605), p = 0.97. A secondary-structure-only model is at chance (AUC 0.51 [0.47, 0.55]).
+The first T4 lysozyme run found 29% (72/248). That run also reported more movers in loops than in helices (48% vs 25%, one-sided Fisher p = 0.041). **That enrichment does not replicate on the clean pooled labels:** loops 25.9% (82/317), all other residues 26.8% (195/728), p = 0.82. A secondary-structure-only model is at chance (AUC 0.52 [0.49, 0.56]).
 
 ---
 
@@ -76,13 +77,13 @@ The first T4 lysozyme run found 29% (72/248). That run also reported more movers
 
 The central hypothesis did not survive.
 
-Substitution features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial) add nothing once the site is known:
+The substitution, the local-sequence part of the question, adds little once the site is known. It was tested three ways (paired ΔAUC, leave-family-out):
 
-* Paired ΔAUC, site + substitution − site: **−0.002 [−0.03, +0.02]** (leave-family-out)
+* Context-free substitution features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial): **+0.014 [−0.01, +0.04]**
+* Substitution × local-structure terms (Gly at positive φ, Pro strain, overpacking, lost side-chain H-bonds, helix/strand propensity change): +0.03 over a full-atom site description, but only about +0.01 over the simple site model
+* A protein language model (ESM-2) scoring the substitution in its whole-sequence evolutionary context: **+0.003 [−0.01, +0.01]**
 
-This time the null is informative. The first engine predicted absolute bending (~30° error) and differenced two predictions, so it could not have seen a ~3° effect even if the information were there. The new model predicts movers directly and does find signal in site features. It finds none in the substitution.
-
-The result holds across label definitions (z > 2 or z > 3; four noise-floor priors), leave-site-out and leave-family-out validation.
+This time the null is informative. The first engine predicted absolute bending (~30° error) and differenced two predictions, so it could not have seen a ~3° effect even if the information were there. The new model predicts movers directly and does find signal in site features. Neither the substitution's physics nor its evolutionary plausibility adds much to that.
 
 ---
 
@@ -90,12 +91,23 @@ The result holds across label definitions (z > 2 or z > 3; four noise-floor prio
 
 Where the mutation sits does carry information:
 
-* Site features: AUC **0.60 [0.56, 0.63]** with whole families held out
-* Beyond secondary structure: **+0.085 [+0.05, +0.12]**
+* Site features: AUC **0.60 [0.56, 0.63]** with whole families held out (0.65 comparing mutations within the same protein)
+* Beyond secondary structure: **+0.073 [+0.03, +0.11]**
 
-The null control shows that much of this is not movement. A site model trained only on WT-vs-WT noise reaches AUC 0.555 on the real labels, which is more than half of the margin above chance. Beyond that noise score, the site features add a movement-specific **+0.05 [+0.01, +0.08]**.
+The null control shows that this is movement, not noise. A site model trained only on WT-vs-WT noise scores the real labels at 0.518, close to chance. Beyond that noise score, the site features add **+0.087 [+0.04, +0.13]**. (Before the v4 calibration fix, about half the site signal was noise structure.)
 
-That remainder is carried mainly by **non-local contacts**. Their coefficient is +0.21 on real movers and −0.14 on noise. The information that local sequence lacks lives, weakly, in tertiary contacts, which is what the first run's core-subset result (0.48 → 0.58, never tested) suggested.
+The signal is carried by **straight WT windows, burial and non-local contacts**. The coefficients are, on real movers vs noise: WT bend −0.47 vs −0.05, burial direction +0.21 vs +0.06, non-local contacts +0.12 vs +0.02. The information that local sequence lacks lives, modestly, in the tertiary environment of the site. That is what the first run's core-subset result (0.48 → 0.58, never tested) suggested.
+
+---
+
+## How far can accuracy go?
+
+Two measurements bound what any model can do here:
+
+* **Label reliability.** Splitting each protein's crystals into two halves and rebuilding the labels on each gives two independent measurements of the same mutations. They agree in direction every time, but whether a borderline effect crosses the threshold is noisy (κ = 0.37). Even an oracle that knew each effect as well as half the data would reach only **AUC ≈ 0.76**, and 85% of the labels rest on a single mutant crystal.
+* **Learning curve.** With 25 / 50 / 75 / 100% of the training families, AUC is 0.55 / 0.58 / 0.59 / 0.60. More data still helps, but it is flattening.
+
+Against that ceiling, the best model found (logistic regression + boosting on all features) reaches **0.63** family-out. Boosting alone reaches 0.69 when ranking mutations within the same protein. It captures about half of the achievable margin above chance. Tuning regularization, a continuous target, full-atom descriptors and ESM-2 each move AUC by at most ±0.02. The remaining headroom is in the labels (replicate crystals), not in the model.
 
 ---
 
@@ -113,9 +125,9 @@ The conclusion is simple:
 
 > Mutation-induced backbone bending is real.
 >
-> Local sequence does not predict it: the substitution adds nothing once the site is known.
+> Local sequence does not predict it: once the site is known, the substitution adds about 0.01 AUC, whether it is described physically or by an evolutionary language model.
 >
-> The site's structural context carries a small real signal, mostly through tertiary contacts. At AUC ≈ 0.60 it is not a usable predictor.
+> The site's structural context carries a modest real signal, mostly through tertiary environment. At AUC ≈ 0.60–0.63, against a label-reliability ceiling near 0.76, it is not a usable predictor.
 
 That result may be less exciting than discovering a new predictor, but it is arguably more informative.
 
@@ -125,10 +137,12 @@ Knowing where the signal is not can be just as valuable as knowing where it is.
 
 ## Technical highlights
 
-* 892 clean WT/mutant pairs from 191 proteins in 158 sequence families, mined systematically from RCSB + SIFTS (7,612 structures screened)
-* Crystal-form matching, resolution cut, ligand-state matching, one row per mutation
-* Heteroscedastic noise floor (σ prior conditioned on B-factor)
+* 1,045 clean WT/mutant pairs from 207 proteins in 166 sequence families, mined systematically from RCSB + SIFTS (7,612 structures screened)
+* Crystal-form matching, resolution cut, ligand-state matching on both sides (additives ignored), one row per mutation
+* Calibrated noise floor: unbiased σ, exact median efficiency, B-factor-conditioned prior, Student-t mapping. WT-vs-WT false positives are 2.4% overall and ≤ 4.9% in every bin.
 * WT-vs-WT null control for threshold calibration and noise-vs-movement decomposition
+* Split-half test-retest of the labels, giving an explicit accuracy ceiling
+* Full-atom site context, substitution × structure terms and ESM-2 language-model features, each tested with a paired ΔAUC
 * Leave-site-out and leave-family-out validation (≥ 30% identity families)
 * Residue-cluster bootstrap confidence intervals (mutations at the same site are resampled together)
 * Paired ΔAUC tests for every model comparison
@@ -161,12 +175,17 @@ python delta_model.py --prior pooled  # sensitivity: old single-sigma noise-floo
 # v3: systematic miner (RCSB + SIFTS), ~6k entries, ~700 MB in mined_pdb/
 python mine_pairs.py              # pinned in manifests/mined.json; pairs/delta_model pick it up
 
+# v4: diagnostics, optional language-model features, model variants
+python diagnostics.py             # null calibration by n_wt + split-half reliability -> results/diagnostics.json
+python plm_features.py            # ESM-2 site log-probs -> results/esm_site_logp.csv (needs torch + fair-esm)
+python model_variants.py          # learners, continuous target, learning curve -> results/model_variants.json
+
 python -m pytest tests/           # offline synthetic tests (no network)
 ```
 
 The scripts must run in this order: later gates reuse the PDB caches (`t4l_pdb/`, `cull_pdb/`, `val_pdb/`) that earlier gates download. On the first run, every RCSB search result is pinned to `manifests/*.json` (see `stats_utils.pinned_ids`). Commit those files so that later runs use the same entries, since live searches drift as the PDB grows. To refresh against today's PDB on purpose, delete a manifest.
 
-> **Status of the numbers.** The Gate 1–5 figures quoted in `RESULTS.md` (and the first-run T4L numbers above) come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic. The v2/v3 numbers in this README come from the current code.
+> **Status of the numbers.** The Gate 1–5 figures quoted in `RESULTS.md` (and the first-run T4L numbers above) come from the original runs, which used a per-pair bootstrap. The scripts now use a residue-cluster bootstrap and a paired ΔAUC test, so CIs are expected to widen somewhat once the gates are re-run. Until then, treat the quoted CIs as optimistic. The headline numbers in this README come from the current (v4) code; the v2 and v3 blocks below are kept as history and used the older, liberal noise floor.
 
 ---
 
@@ -205,6 +224,14 @@ Both are covered by offline synthetic tests (`tests/`). Full numbers and robustn
 * **"What" (the substitution, i.e. local sequence) has no edge:** ΔAUC −0.002 [−0.03, +0.02].
 * **"Where" has a small, real edge.** It beats SS by +0.085 [+0.05, +0.12]. A WT-vs-WT null control (held-out WT crystals scored as pseudo-mutants) shows that more than half of its margin above chance is predictability of WT noise (a noise-only score reaches 0.555). The movement-specific remainder is ΔAUC ≈ +0.05 [+0.01, +0.08], carried mainly by non-local contacts.
 * The z threshold is close to calibrated: 6.9% pseudo-movers against 37.6% real movers.
+
+**v4: audited labels** (1,045 clean mutations, 277 movers, 207 proteins, 166 families; full tables in `RESULTS.md`):
+
+* **The v3 noise floor was liberal where few WT crystals exist.** Uncorrected MAD underestimates σ by a third at n = 3, so 17–20% of WT-vs-WT pseudo-mutants were "movers" in forms with 3–4 WT crystals. With an unbiased SD-based σ, the exact median efficiency and a Student-t mapping, the false-positive rate is 2.4% overall and ≤ 4.9% in every bin.
+* Common crystallization additives no longer veto a crystal (+153 mutations, null unchanged). The ligand rule now also applies to the WT reference.
+* With calibrated labels the site signal is movement, not noise structure: excess over a noise-only score +0.087 [+0.04, +0.13], up from +0.047.
+* Substitution: +0.014 context-free, ≈ +0.01 net with substitution × structure terms, +0.003 with ESM-2.
+* Ceiling: split-half oracle AUC ≈ 0.76. Best model 0.63 family-out.
 
 ---
 
