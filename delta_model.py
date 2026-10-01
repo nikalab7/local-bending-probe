@@ -40,7 +40,8 @@ import argparse
 import json
 import os
 import numpy as np
-from stats_utils import cluster_auc_ci, paired_delta_auc
+from stats_utils import cluster_auc_ci, paired_delta_auc, within_auc_ci
+from structure_features import CONTEXT, INTERACT
 
 AA = "ARNDCQEGHILKMFPSTWYV"
 KD = dict(A=1.8, R=-4.5, N=-3.5, D=-3.5, C=2.5, Q=-3.5, E=-3.5, G=-0.4, H=-3.2,
@@ -80,10 +81,20 @@ SITE = ["ss_H", "ss_E", "ss_L", "b_site", "b_window", "n_ca10", "hse_up",
 SUBST = ["d_vol", "abs_d_vol", "d_hyd", "d_charge", "to_P", "from_P", "to_G",
          "from_G", "blosum62", "cavity", "d_hyd_x_burial"]
 SS = ["ss_H", "ss_E", "ss_L"]
-FEATURE_SETS = {"ss": SS, "site": SITE, "subst": SUBST, "site+subst": SITE + SUBST}
-# paired contrasts (base, richer, name): the two questions the model answers
-CONTRASTS = [("site", "site+subst", "subst_over_site"),   # does "what" add to "where"?
-             ("ss", "site", "site_over_ss")]              # is "where" more than SS?
+FEATURE_SETS = {
+    "ss": SS,
+    "site": SITE,                                    # C-alpha "where" (v2/v3)
+    "subst": SUBST,                                  # context-free "what"
+    "site+subst": SITE + SUBST,
+    "where": SITE + CONTEXT,                         # + full-atom site context
+    "where+what": SITE + CONTEXT + SUBST + INTERACT,  # + substitution x context
+}
+# paired contrasts (base, richer, name)
+CONTRASTS = [("site", "site+subst", "subst_over_site"),   # context-free "what" over "where"
+             ("ss", "site", "site_over_ss"),              # is "where" more than SS?
+             ("site", "where", "context_over_site"),      # does full-atom context help?
+             ("where", "where+what", "what_over_where")]  # "what given where" over "where"
+HGB_SETS = ("site", "where", "where+what")             # boosting only where informative
 FAMILY_FOLDS = 10
 
 
@@ -133,10 +144,18 @@ def subst_features(wt, mut, hse_up):
 
 
 def featurize(rows):
+    """Site + substitution features; full-atom CONTEXT/INTERACT when the row
+    carries its scaffold file (pairs rows do), NaN otherwise (imputed)."""
+    import structure_features
     F = []
     for x in rows:
         sf = site_features(x["scaffold_res"], x["r"], x["s"], x["scaffold_ss"], x["wt_bend"])
-        F.append({**sf, **subst_features(x["wt"], x["mut"], sf["hse_up"])})
+        f = {**sf, **subst_features(x["wt"], x["mut"], sf["hse_up"])}
+        if "scaffold_path" in x:
+            f.update(structure_features.row_features(x))
+        else:
+            f.update({k: np.nan for k in CONTEXT + INTERACT})
+        F.append(f)
     return F
 
 
@@ -182,12 +201,14 @@ def site_folds(groups, k, seed):
 
 
 def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
-             kinds=("logreg", "hgb")):
+             kinds=("logreg", "hgb"), proteins=None):
     """Out-of-fold AUCs + paired contrasts.
 
     leave_site_out   : (protein, residue) groups in k folds, averaged over repeats
     leave_family_out : whole sequence families (>= 30% identity) in
                        FAMILY_FOLDS folds (leave-one-family-out if fewer)
+    within-protein AUC (if proteins given): only mover/non-mover pairs from the
+    same protein are compared, so protein-level base rates cannot help.
     """
     from sklearn.metrics import average_precision_score
     feature_sets = feature_sets or FEATURE_SETS
@@ -197,6 +218,8 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
     for name, cols in feature_sets.items():
         X = matrix(F, cols)
         for kind in kinds:
+            if kind == "hgb" and name not in HGB_SETS:
+                continue
             P = np.nanmean([oof_predict(X, y, site_folds(groups, k, s), kind)
                             for s in range(repeats)], axis=0)
             Q = oof_predict(X, y, site_folds(families, min(FAMILY_FOLDS, n_fam), 0), kind) \
@@ -212,6 +235,10 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
                                movers=int(y[ok].sum()), clusters=ncl,
                                ap=float(average_precision_score(y[ok], pr[ok])),
                                base=float(y[ok].mean()))
+                if proteins is not None:
+                    w, wlo, whi = within_auc_ci(y[ok], pr[ok], np.asarray(proteins)[ok],
+                                                groups[ok])
+                    res[cv].update(within=w, within_lo=wlo, within_hi=whi)
             results[f"{name}|{kind}"] = res
     contrasts = {}
     for base, rich, label in CONTRASTS:
@@ -246,8 +273,51 @@ def null_control(null, zthr):
         return out
     F = featurize(null)
     res, con = evaluate(F, y, g, fam, repeats=2, kinds=("logreg",),
-                        feature_sets={"ss": SS, "site": SITE})
+                        feature_sets={"ss": SS, "site": SITE, "where": SITE + CONTEXT})
     out.update(results=res, contrasts=con)
+    return out
+
+
+def noise_decomposition(F, y, groups, Fn, yn, gn, cols, k=5, seed=0):
+    """How much of a feature set's real-data AUC is predictability of noise?
+
+    Real rows and WT-vs-WT pseudo-mutants share k site folds. For each fold, a
+    "noise score" model is trained on the pseudo labels of the OTHER sites and
+    scores the real rows; a "real" model is trained on real labels. Reported:
+      noise_auc          AUC of the noise score on real labels
+      real_auc           AUC of the real-label model
+      excess             paired dAUC (noise score + features) - noise score:
+                         the movement-specific part the features carry
+      real_model_on_null AUC of the real-label model on pseudo labels
+    """
+    sites = sorted(set(groups) | set(gn))
+    perm = np.random.default_rng(seed).permutation(len(sites))
+    fold = {sites[j]: i % k for i, j in enumerate(perm)}
+    fr = np.array([fold[s] for s in groups]); fn = np.array([fold[s] for s in gn])
+    X, Xn = matrix(F, cols), matrix(Fn, cols)
+    noise = np.full(len(y), np.nan); real = np.full(len(y), np.nan)
+    on_null = np.full(len(yn), np.nan)
+    for f in range(k):
+        tr_n, te = fn != f, fr == f
+        if len(np.unique(yn[tr_n])) == 2:
+            noise[te] = make_model("logreg").fit(Xn[tr_n], yn[tr_n]).predict_proba(X[te])[:, 1]
+        m = make_model("logreg").fit(X[fr != f], y[fr != f])
+        real[te] = m.predict_proba(X[te])[:, 1]
+        on_null[fn == f] = m.predict_proba(Xn[fn == f])[:, 1]
+    ok = np.isfinite(noise)
+    lg = np.log(np.clip(noise, 1e-6, 1 - 1e-6) / (1 - np.clip(noise, 1e-6, 1 - 1e-6)))[:, None]
+    base = np.full(len(y), np.nan); both = np.full(len(y), np.nan)
+    for f in range(k):
+        tr, te = (fr != f) & ok, (fr == f) & ok
+        base[te] = make_model("logreg").fit(lg[tr], y[tr]).predict_proba(lg[te])[:, 1]
+        Z = np.c_[lg, X]
+        both[te] = make_model("logreg").fit(Z[tr], y[tr]).predict_proba(Z[te])[:, 1]
+    out = {}
+    a, lo, hi, _ = cluster_auc_ci(y[ok], noise[ok], groups[ok]); out["noise_auc"] = (a, lo, hi)
+    a, lo, hi, _ = cluster_auc_ci(y, real, groups); out["real_auc"] = (a, lo, hi)
+    d, lo, hi, p = paired_delta_auc(y[ok], base[ok], both[ok], groups[ok])
+    out["excess"] = (d, lo, hi, p)
+    a, lo, hi, _ = cluster_auc_ci(yn, on_null, gn); out["real_model_on_null"] = (a, lo, hi)
     return out
 
 
@@ -285,15 +355,25 @@ def main():
         print("too few movers or non-movers to evaluate"); return
 
     F = featurize(rows)
-    results, contrasts = evaluate(F, y, groups, families)
+    results, contrasts = evaluate(F, y, groups, families, proteins=proteins)
     nc = null_control(null, zthr)
+    decomp = {}
+    if nc and nc.get("movers", 0) >= 10:
+        Fn = featurize(null)
+        yn = np.array([abs(x["z"]) > zthr for x in null])
+        gn = np.array([f"{x['protein']}:{x['r']}" for x in null])
+        for name in ("site", "where"):
+            decomp[name] = noise_decomposition(F, y, groups, Fn, yn, gn, FEATURE_SETS[name])
 
     print("\n" + "=" * 74 + "\n  DELTA MODEL -- out-of-fold mover retrieval\n" + "=" * 74)
     for key, res in results.items():
         for cv, m in res.items():
-            print(f"  {key:18s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}] "
-                  f"AP={m['ap']:.3f} (base {m['base']:.2f})  n={m['n']} movers={m['movers']}")
-    print("\n  paired dAUC: subst_over_site = (site+subst) - site;  site_over_ss = site - ss")
+            w = (f"  within-protein={m['within']:.3f} [{m['within_lo']:.2f},{m['within_hi']:.2f}]"
+                 if "within" in m else "")
+            print(f"  {key:20s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}] "
+                  f"AP={m['ap']:.3f} (base {m['base']:.2f}){w}")
+    print("\n  paired dAUC (richer - base): subst_over_site, site_over_ss, "
+          "context_over_site, what_over_where")
     for key, c in contrasts.items():
         print(f"  {key:38s} dAUC={c['delta']:+.3f} 90%CI[{c['lo']:+.2f},{c['hi']:+.2f}] "
               f"P(d<=0)={c['p_le0']:.3f}")
@@ -303,11 +383,17 @@ def main():
         for key, res in nc.get("results", {}).items():
             for cv, m in res.items():
                 print(f"  {key:18s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}]")
+    for name, d in decomp.items():
+        print(f"\n  NOISE DECOMPOSITION ({name}): noise score on real labels AUC={d['noise_auc'][0]:.3f} "
+              f"[{d['noise_auc'][1]:.2f},{d['noise_auc'][2]:.2f}]; real model AUC={d['real_auc'][0]:.3f}; "
+              f"excess over noise dAUC={d['excess'][0]:+.3f} [{d['excess'][1]:+.2f},{d['excess'][2]:+.2f}] "
+              f"P(d<=0)={d['excess'][3]:.3f}; real model on null AUC={d['real_model_on_null'][0]:.3f}")
 
     os.makedirs("results", exist_ok=True)
     with open("results/delta_model.json", "w") as fh:
         json.dump(dict(z_threshold=zthr, prior=prior, n=len(y), movers=int(y.sum()),
-                       results=results, contrasts=contrasts, null_control=nc), fh, indent=1)
+                       results=results, contrasts=contrasts, null_control=nc,
+                       noise_decomposition=decomp), fh, indent=1)
     print("\nwrote results/delta_model.json")
 
     import matplotlib; matplotlib.use("Agg")

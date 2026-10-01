@@ -317,7 +317,8 @@ def _synthetic_features(signal, n_sites=60, per_site=3, seed=0):
     for s in range(n_sites):
         site_flex = rng.normal()
         for _ in range(per_site):
-            f = {c: rng.normal() for c in delta_model.SITE + delta_model.SUBST}
+            f = {c: rng.normal() for c in delta_model.SITE + delta_model.SUBST
+                 + delta_model.CONTEXT + delta_model.INTERACT}
             f["b_site"] = site_flex + 0.3 * rng.normal()
             F.append(f)
             y.append(signal * site_flex + rng.normal() > 0.8)
@@ -343,3 +344,126 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("PASS", name)
+
+
+# ----------------------------- calibration ----------------------------------
+def test_sigma_estimators_unbiased():
+    """Finite-sample corrected MAD, Qn and SD/c4 are unbiased for normal data
+    (the uncorrected 1.4826*MAD is ~0.67 sigma at n = 3)."""
+    rng = np.random.default_rng(11)
+    for n in (3, 5, 8, 12):
+        v = rng.normal(size=(4000, n))
+        for est in (pairs.mad_sigma, pairs.qn_sigma, pairs.sd_sigma):
+            m = np.mean([est(row) for row in v])
+            assert abs(m - 1.0) < 0.05, (est.__name__, n, m)
+    raw = np.mean([1.4826 * np.median(np.abs(r - np.median(r))) for r in rng.normal(size=(4000, 3))])
+    assert raw < 0.75
+
+
+def test_median_efficiency_table():
+    rng = np.random.default_rng(12)
+    for k in (1, 2, 3, 4, 7, 20, 30):
+        sim = np.median(rng.normal(size=(100000, k)), axis=1).std() * np.sqrt(k)
+        assert abs(pairs.med_eff(k) - sim) / sim < 0.02, (k, pairs.med_eff(k), sim)
+
+
+def test_label_se_uses_exact_efficiency():
+    W = dict(per={10: (100.0, 1.0, 9, 0.0)}, prior={10: 1.0})
+    delta, se, z, sig, _ = pairs.label(W, 10, [102.0])
+    assert sig == 1.0 and delta == 2.0
+    assert abs(se - np.sqrt(1.0 + pairs.med_eff(9) ** 2 / 9)) < 1e-12
+
+
+# ------------------------- full-atom features --------------------------------
+def _place(a, b, c, bond, angle, torsion):
+    """NeRF: atom d with |cd| = bond, angle(b, c, d) = angle, dihedral(a, b, c, d) = torsion."""
+    bc = (c - b) / np.linalg.norm(c - b)
+    n = np.cross(b - a, bc); n /= np.linalg.norm(n)
+    m = np.cross(n, bc)
+    ang, tor = np.radians(angle), np.radians(torsion)
+    d2 = np.array([-bond * np.cos(ang), bond * np.sin(ang) * np.cos(tor),
+                   bond * np.sin(ang) * np.sin(tor)])
+    return c + d2[0] * bc + d2[1] * m + d2[2] * n
+
+
+def _backbone(phis, psis):
+    """Ideal backbone N, CA, C (+ O) for the given phi/psi lists, omega = 180."""
+    N = np.array([0.0, 0.0, 0.0]); CA = np.array([1.458, 0.0, 0.0])
+    C = _place(np.array([0.0, 1.0, 0.0]), N, CA, 1.525, 111.0, -60.0)
+    atoms = [{"N": N, "CA": CA, "C": C}]
+    for i in range(1, len(phis)):
+        p = atoms[-1]
+        n = _place(p["N"], p["CA"], p["C"], 1.329, 116.2, psis[i - 1])
+        ca = _place(p["CA"], p["C"], n, 1.458, 121.7, 180.0)
+        c = _place(p["C"], n, ca, 1.525, 111.0, phis[i])
+        atoms.append({"N": n, "CA": ca, "C": c})
+    for i in range(len(atoms) - 1):
+        atoms[i]["O"] = _place(atoms[i + 1]["N"], atoms[i]["CA"], atoms[i]["C"], 1.231, 120.5, 180.0)
+    return atoms
+
+
+def _write_backbone_pdb(path, atoms, seq):
+    import structure_features as sf
+    three = {v: k for k, v in sf.THREE2ONE.items()}
+    lines, k = [], 1
+    for i, (at, aa) in enumerate(zip(atoms, seq), start=1):
+        for name, xyz in at.items():
+            lines.append(f"ATOM  {k:5d}  {name:<3s} {three[aa]} A{i:4d}    "
+                         f"{xyz[0]:8.3f}{xyz[1]:8.3f}{xyz[2]:8.3f}  1.00 20.00           {name[0]}")
+            k += 1
+    open(path, "w").write("\n".join(lines + ["END"]) + "\n")
+
+
+def test_dihedral_sign_convention():
+    import structure_features as sf
+    for th in (-120.0, -60.0, 30.0, 150.0):
+        t = np.radians(th)
+        d = sf.dihedral(np.array([1.0, 0, 0]), np.zeros(3), np.array([0, 0, 1.0]),
+                        np.array([np.cos(t), np.sin(t), 1.0]))
+        assert abs(d - th) < 1e-9
+
+
+def test_phi_psi_from_built_backbone():
+    import structure_features as sf
+    phis = [-57.0, -57.0, -120.0, 60.0, -57.0, -65.0, -57.0]
+    psis = [-47.0, -47.0, 130.0, 45.0, -47.0, 140.0, -47.0]
+    atoms = _backbone(phis, psis)
+    d = tempfile.mkdtemp(); p = os.path.join(d, "bb.pdb")
+    _write_backbone_pdb(p, atoms, "AAGGAPA")
+    residues, het = sf.parse_atoms(p, "A")
+    assert len(residues) == 7 and len(het) == 0
+    for r in range(2, 7):
+        phi, psi = sf.phi_psi(residues, r)
+        assert abs(phi - phis[r - 1]) < 0.5 and abs(psi - psis[r - 1]) < 0.5, (r, phi, psi)
+    ctx = sf.context_features(residues, het, 4, "L", None)
+    assert ctx["phi_pos"] == 1.0 and ctx["phi_alpha"] == 0.0
+    ctx3 = sf.context_features(residues, het, 3, "L", None)
+    assert ctx3["phi_beta"] == 1.0
+
+
+def test_interaction_features_logic():
+    import structure_features as sf
+    base = dict(phi=70.0, phi_pos=1.0, cb_density=10.0, sc_bb_hbonds=2.0, helix_nterm=0.0)
+    f = sf.interaction_features(base, "G", "A", "L")
+    assert f["gly_phi_pos_loss"] == 1.0 and f["helix_prop_change"] == 0.0
+    assert sf.interaction_features(base, "G", "G", "L")["gly_phi_pos_loss"] == 0.0
+    assert sf.interaction_features({**base, "phi_pos": 0.0, "phi": -65.0}, "G", "A", "L")["gly_phi_pos_loss"] == 0.0
+    hel = {**base, "phi": -60.0, "phi_pos": 0.0}
+    f = sf.interaction_features(hel, "A", "P", "H")
+    assert f["pro_in_helix"] == 1.0 and f["pro_phi_strain"] < 0.1
+    assert abs(f["helix_prop_change"] - 3.16) < 1e-9
+    assert sf.interaction_features({**hel, "phi": -150.0}, "A", "P", "L")["pro_phi_strain"] > 1.0
+    assert sf.interaction_features(base, "S", "A", "L")["sc_hb_loss"] == 2.0      # loses both
+    assert sf.interaction_features(base, "S", "T", "L")["sc_hb_loss"] == 0.0      # can still H-bond
+    assert sf.interaction_features(base, "A", "W", "L")["overpack"] > 0.0
+    assert sf.interaction_features(base, "W", "A", "L")["overpack"] == 0.0
+
+
+def test_within_protein_auc_ignores_base_rates():
+    from stats_utils import within_auc, fast_auc
+    rng = np.random.default_rng(4)
+    strata = np.repeat(["P", "Q"], 200)
+    y = np.r_[rng.random(200) < 0.7, rng.random(200) < 0.2]
+    score = (strata == "P").astype(float) + 1e-3 * rng.normal(size=400)   # protein identity only
+    assert fast_auc(y, score) > 0.7
+    assert abs(within_auc(y, score, strata) - 0.5) < 0.1

@@ -15,23 +15,40 @@ rows. This module fixes the labels:
                   what WT crystals of that form typically carry is excluded.
   4. AGGREGATION  one row per MUTATION: median bending over its crystals (the
                   form with the most crystals is used), not one row per PDB entry.
-  5. NOISE FLOOR  per-window WT sigma is shrunk toward a prior (few-crystal MADs
-                  are unreliable). The default prior is heteroscedastic: within
-                  each form, log(sigma) is regressed on the window's WT B-factor
+  5. NOISE FLOOR  per-window WT sigma = sample SD / c4(n) (unbiased). The first
+                  version used 1.4826 * MAD with no finite-sample correction,
+                  which underestimates sigma by a third at n = 3: 17-20% of
+                  WT-vs-WT pseudo-mutants were "movers" in forms with 3-4 WT
+                  crystals. Bias-corrected MAD and Qn are available
+                  (SIGMA_EST) but calibrate worse on the null (6-7% and 6%
+                  false positives vs 4% for SD at |z| > 2): WT crystals of one
+                  form are a mixture (most agree, a few sit in another
+                  conformation), a robust scale ignores the minority, and a
+                  mutant crystal in that minority state then looks like a
+                  mover. SD sees the minority, so its errors are conservative.
+                  Sigma is then shrunk toward a prior. The default prior is heteroscedastic: within each
+                  form, log(sigma) is regressed on the window's WT B-factor
                   (z within chain), because flexible windows are also noisier.
                   Shrinking every window toward ONE pooled sigma pulls high-B
                   windows' sigma down, inflates their z, and manufactures a
-                  B-factor -> "mover" association. prior="pooled" keeps the old
+                  B-factor -> "mover" association. prior="pooled" keeps that
                   behaviour for comparison. The threshold uses the standard
                   error of a median-vs-median difference:
-                      SE = 1.2533 * sigma * sqrt(1/m + 1/n)
-                  mover := |delta| / SE > Z_MOVER   (~5% false-positive rate).
+                      SE = sigma * sqrt(e_m^2 / m + e_n^2 / n)
+                  with e_k = sd(median of k) * sqrt(k) / sigma (1 for k <= 2,
+                  -> 1.2533 for large k), and mover := |delta| / SE > Z_MOVER.
+                  pairs.null_rows checks the false-positive rate empirically.
+  6. WT LIGANDS   the ligand rule applies to the WT reference too: a WT crystal
+                  whose het groups near a window differ from the form's typical
+                  set is left out of that window's median and sigma, as long as
+                  >= MIN_WT clean crystals remain (WT_LIG_FILTER = "prefer").
 
 Window: the canonical 5-C-alpha window centred on the mutated residue
 (start s = r - 2), measured with bending_metric.bending_angle.
 """
 from __future__ import annotations
 import gzip
+import math
 import os
 from collections import Counter, defaultdict
 import numpy as np
@@ -47,9 +64,33 @@ PRIOR_MIN_WINDOWS = 10 # fewer usable windows in a form -> fall back to pooled
 Z_MOVER = 2.0
 LIG_CUTOFF = 8.0       # Angstrom, het atom to any window C-alpha
 LIG_TYPICAL = 0.5      # het present in >= this fraction of form-WT = "normal"
-MED_EFF = 1.2533       # sd(median) / sd(mean) for normal data
+MED_EFF = 1.2533       # sd(median) / sd(mean) for normal data, large samples
+# ligand rule for the WT reference, per window: "prefer" = use WT crystals in the
+# form's typical ligand state when >= MIN_WT remain, else all; "strict" = typical
+# state only (drops windows); "off" = all WT crystals
+WT_LIG_FILTER = "prefer"
+# finite-sample bias correction for 1.4826 * MAD (Croux & Rousseeuw 1992);
+# n > 9: n / (n - 0.8). Checked by simulation in tests.
+MAD_BN = {2: 1.196, 3: 1.495, 4: 1.363, 5: 1.206, 6: 1.200, 7: 1.140, 8: 1.129,
+          9: 1.107}
+# Qn finite-sample factors (Croux & Rousseeuw 1992); n > 9: n/(n+1.4) odd, n/(n+3.8) even
+QN_DN = {2: 0.399, 3: 0.994, 4: 0.512, 5: 0.844, 6: 0.611, 7: 0.857, 8: 0.669,
+         9: 0.872}
+SIGMA_EST = "sd"       # per-window WT sigma: "sd" | "qn" | "mad" (see module doc)
+# sd(median of k normals) * sqrt(k), by simulation (4e5 draws); k > 15 uses
+# MED_EFF * sqrt(k / (k + 1.45)), which matches simulation to < 0.5%.
+MED_EFF_K = {1: 1.0, 2: 1.0, 3: 1.162, 4: 1.094, 5: 1.196, 6: 1.137, 7: 1.215,
+             8: 1.160, 9: 1.217, 10: 1.175, 11: 1.230, 12: 1.189, 13: 1.232,
+             14: 1.195, 15: 1.238}
 NULL_HELDOUT = 10      # WT crystals per form held out as pseudo-mutants (null control)
 WATER = {"HOH", "DOD", "WAT", "H2O"}
+# Crystallization additives / buffer components: ignored by the ligand-state
+# rule when IGNORE_ADDITIVES. Metals are NOT listed (structural / catalytic
+# Mg, Ca, Zn, Fe, Mn sites are real ligand states).
+ADDITIVES = frozenset("""SO4 PO4 CL NA K BR IOD NO3 SCN NH4 GOL EDO PEG PGE PG4 1PE P6G
+    PE4 PE5 2PE 12P 15P ACT ACY FMT BME HED DMS MPD MRD TRS EPE MES IMD IPA EOH MOH
+    MLI TAR BU3 CAC CXS PGO DIO BTB B3P""".split())
+IGNORE_ADDITIVES = False
 
 THREE2ONE = {
     'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C', 'GLN': 'Q',
@@ -158,15 +199,61 @@ def chain_bz(res):
     return dict(zip(keys, z))
 
 
+def mad_sigma(vals):
+    """Bias-corrected robust sigma: 1.4826 * MAD * b_n (0 for fewer than 2 values)."""
+    vals = np.asarray(vals, float)
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    s = 1.4826 * np.median(np.abs(vals - np.median(vals)))
+    return float(s * MAD_BN.get(n, n / (n - 0.8)))
+
+
+def qn_sigma(vals):
+    """Rousseeuw-Croux Qn scale (82% efficient, robust), finite-sample corrected."""
+    vals = np.asarray(vals, float)
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    h = n // 2 + 1
+    i, j = np.triu_indices(n, 1)
+    d = np.sort(np.abs(vals[i] - vals[j]))
+    dn = QN_DN.get(n, n / (n + 1.4) if n % 2 else n / (n + 3.8))
+    return float(2.2219 * d[h * (h - 1) // 2 - 1] * dn)
+
+
+def sd_sigma(vals):
+    """Sample SD / c4(n): unbiased for normal data and the most efficient, but not
+    robust -- an outlying WT crystal inflates sigma (fewer movers, never more)."""
+    vals = np.asarray(vals, float)
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    c4 = math.sqrt(2.0 / (n - 1)) * math.exp(math.lgamma(n / 2) - math.lgamma((n - 1) / 2))
+    return float(vals.std(ddof=1) / c4)
+
+
+def sigma_hat(vals):
+    return {"mad": mad_sigma, "qn": qn_sigma, "sd": sd_sigma}[SIGMA_EST](vals)
+
+
+def med_eff(k):
+    """sd(median of k iid normals) / (sigma / sqrt(k))."""
+    return MED_EFF_K.get(k) or float(MED_EFF * np.sqrt(k / (k + 1.45)))
+
+
 def fit_sigma_prior(sig, bw, n, pooled):
     """Per-window prior sigma from WT B-factor: log(sigma) = a + b * bw.
 
     sig, bw, n : per-window raw sigma, WT window B z-score, WT crystal count.
-    Slope by weighted least squares (weight n: more crystals, less noisy
-    log-sigma); intercept set so the median residual is 0, which keeps the
-    prior on the same scale as the pooled median. The prior is clipped to the
-    5-95th percentile of observed sigma so it never extrapolates. Too few
-    windows or no B variation -> constant pooled prior, slope 0.
+    Slope by weighted least squares on log-sigma (weight n: more crystals,
+    less noisy log-sigma; windows with sigma = 0 cannot enter the log fit).
+    The intercept is set from the MEAN of sigma * exp(-b * bw) over all
+    windows: sigma is unbiased after the MAD correction, but its distribution
+    is right-skewed at small n, so a median-based intercept would put the
+    prior below the true noise level. The prior is clipped to the 5-95th
+    percentile of observed sigma so it never extrapolates. Too few windows or
+    no B variation -> constant pooled prior, slope 0.
     Returns (prior array, slope).
     """
     sig, bw, n = (np.asarray(v, float) for v in (sig, bw, n))
@@ -175,10 +262,27 @@ def fit_sigma_prior(sig, bw, n, pooled):
         return np.full(len(sig), pooled), 0.0
     ls = np.log(sig[use])
     b = float(np.polyfit(bw[use], ls, 1, w=np.sqrt(n[use]))[0])
-    a = float(np.median(ls - b * bw[use]))
+    fin = np.isfinite(bw)
+    a = float(np.log(np.mean(sig[fin] * np.exp(-b * bw[fin]))))
     lo, hi = np.percentile(sig[use], [5, 95])
-    bwf = np.where(np.isfinite(bw), bw, np.nanmedian(bw[use]))
+    bwf = np.where(fin, bw, np.nanmedian(bw[use]))
     return np.clip(np.exp(a + b * bwf), lo, hi), b
+
+
+def bend_of(st, s):
+    """window_bend of the selected chain, cached on the structure dict."""
+    cache = st.setdefault("_bend", {})
+    key = (st["chid"], s)
+    if key not in cache:
+        cache[key] = window_bend(st["res"], s)
+    return cache[key]
+
+
+def bz_of(st):
+    cache = st.setdefault("_bz", {})
+    if st["chid"] not in cache:
+        cache[st["chid"]] = chain_bz(st["res"])
+    return cache[st["chid"]]
 
 
 def window_bend(res, s):
@@ -213,15 +317,37 @@ def assign_forms(structs):
     return form
 
 
+def het_map(st, res):
+    """{resSeq: het names with an atom within LIG_CUTOFF of that C-alpha}.
+
+    Computed once per (structure, chain) and cached on the structure dict.
+    """
+    cache = st.setdefault("_het_map", {})
+    key = id(res)
+    if key not in cache:
+        out = {}
+        if st["hets"] and res:
+            keys = sorted(res)
+            ca = np.array([res[k][1] for k in keys])
+            names = [n for n, _ in st["hets"]]
+            xyz = np.array([x for _, x in st["hets"]])
+            close = np.linalg.norm(xyz[:, None, :] - ca[None, :, :], axis=2) < LIG_CUTOFF
+            for i, j in zip(*np.nonzero(close)):
+                out.setdefault(keys[j], set()).add(names[i])
+        cache[key] = {k: frozenset(v) for k, v in out.items()}
+    return cache[key]
+
+
 def near_hets(st, res, s):
-    """Het residue names with an atom within LIG_CUTOFF of window s..s+4."""
-    ca = np.array([res[w][1] for w in range(s, s + 5) if w in res])
-    if not len(ca) or not st["hets"]:
-        return frozenset()
+    """Het residue names with an atom within LIG_CUTOFF of window s..s+4
+    (crystallization additives left out when IGNORE_ADDITIVES)."""
+    m = het_map(st, res)
     names = set()
-    for name, xyz in st["hets"]:
-        if np.min(np.linalg.norm(ca - xyz, axis=1)) < LIG_CUTOFF:
-            names.add(name)
+    for w in range(s, s + 5):
+        if w in res:
+            names |= m.get(w, frozenset())
+    if IGNORE_ADDITIVES:
+        names -= ADDITIVES
     return frozenset(names)
 
 
@@ -233,27 +359,34 @@ def form_stats(structs, wts, cons, prior):
     """
     if len(wts) < MIN_WT:
         return None
-    bz = [chain_bz(structs[p]["res"]) for p in wts]
+    bz = [bz_of(structs[p]) for p in wts]
     per = {}
+    mode = {True: "strict", False: "off"}.get(WT_LIG_FILTER, WT_LIG_FILTER)
     for s in range(min(cons), max(cons) - 3):
-        vals, bws = [], []
+        typical = typical_hets(structs, wts, s) if mode != "off" else None
+        obs = []                                   # (bend, window B z, clean?)
         for p, z in zip(wts, bz):
-            v = window_bend(structs[p]["res"], s)
-            if v is not None:
-                vals.append(v)
-                zw = np.array([z[w] for w in range(s, s + 5)])
-                bws.append(float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
-                           else np.nan)
+            v = bend_of(structs[p], s)
+            if v is None:
+                continue
+            zw = np.array([z[w] for w in range(s, s + 5)])
+            clean = typical is None or near_hets(structs[p], structs[p]["res"], s) == typical
+            obs.append((v, float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
+                        else np.nan, clean))
+        clean_obs = [o for o in obs if o[2]]
+        if mode == "strict" or (mode == "prefer" and len(clean_obs) >= MIN_WT):
+            obs = clean_obs
+        vals = [o[0] for o in obs]
+        bws = [o[1] for o in obs]
         if len(vals) >= MIN_WT:
             vals = np.array(vals)
             med = float(np.median(vals))
             bws = np.array(bws)
             bw = float(np.median(bws[np.isfinite(bws)])) if np.isfinite(bws).any() else np.nan
-            per[s] = (med, float(1.4826 * np.median(np.abs(vals - med))), len(vals), bw)
-    pos = [v[1] for v in per.values() if v[1] > 0]
-    if not pos:
+            per[s] = (med, sigma_hat(vals), len(vals), bw)
+    if not per or not any(v[1] > 0 for v in per.values()):
         return None
-    pooled = float(np.median(pos))
+    pooled = float(np.mean([v[1] for v in per.values()]))
     keys = sorted(per)
     if prior == "bfactor":
         pr, slope = fit_sigma_prior([per[s][1] for s in keys], [per[s][3] for s in keys],
@@ -277,7 +410,8 @@ def label(W, s, bends):
     wt_med, sig_hat, n, _ = W["per"][s]
     sig_prior = W["prior"][s]
     sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * sig_prior ** 2) / (n + SHRINK_K)))
-    se = float(MED_EFF * sig * np.sqrt(1.0 / len(bends) + 1.0 / n))
+    m = len(bends)
+    se = float(sig * np.sqrt(med_eff(m) ** 2 / m + med_eff(n) ** 2 / n))
     delta = float(np.median(bends)) - wt_med
     return delta, se, delta / se, sig, sig_prior
 
@@ -378,7 +512,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
             if near_hets(structs[p], structs[p]["res"], s) != typical:
                 lig_drop += 1
                 continue
-            b = window_bend(structs[p]["res"], s)
+            b = bend_of(structs[p], s)
             if b is not None:
                 bends.append(b); used.append(p)
         diag["mutant_crystals_ligand_mismatch"] += lig_drop
@@ -387,8 +521,11 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
             continue
         m = len(bends)
         delta, se, z, sig, sig_prior = label(W, s, bends)
-        # best-resolution WT of this form that actually resolves the window
-        scaffold = min((p for p in W["wts"] if window_bend(structs[p]["res"], s) is not None),
+        # best-resolution WT of this form that resolves the window, preferring
+        # crystals in the form's typical ligand state there
+        cands = [p for p in W["wts"] if bend_of(structs[p], s) is not None]
+        clean_wt = [p for p in cands if near_hets(structs[p], structs[p]["res"], s) == typical]
+        scaffold = min(clean_wt or cands,
                        key=lambda p: (structs[p]["resolution"], -len(structs[p]["res"])))
         cand[mut].append(dict(
             protein=protein, family=family or protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
@@ -399,6 +536,8 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
             res_mut=float(np.median([structs[p]["resolution"] for p in used])),
             pdbs=sorted(used), scaffold=scaffold,
             scaffold_res=structs[scaffold]["res"],
+            scaffold_path=pdb_paths[scaffold], scaffold_chain=structs[scaffold]["chid"],
+            scaffold_helix=structs[scaffold]["helix"], scaffold_sheet=structs[scaffold]["sheet"],
             scaffold_ss=ss_of(structs[scaffold], structs[scaffold]["chid"], r),
             wt_seq="".join(cons[w] for w in range(s, s + 5))))
     rows = [max(v, key=lambda x: (x["n_mut"], x["n_wt"])) for v in cand.values()]
@@ -440,7 +579,7 @@ def null_rows(rows, structs, wt_by_form, cons, prior):
                 continue
             if near_hets(structs[h], structs[h]["res"], s) != typical_hets(structs, rest, s):
                 continue
-            b = window_bend(structs[h]["res"], s)
+            b = bend_of(structs[h], s)
             if b is None:
                 continue
             delta, se, z, sig, sig_prior = label(W, s, [b])
