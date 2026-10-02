@@ -42,8 +42,8 @@ from collections import Counter, defaultdict
 SEARCH = "https://search.rcsb.org/rcsbsearch/v2/query"
 GRAPHQL = "https://data.rcsb.org/graphql"
 MINED_DIR = "mined_pdb"
-MANIFEST = os.path.join("manifests", "mined.json")
-MIN_SINGLE = 8          # single-substitution entities per accession (facet cut)
+MANIFEST = os.path.join("manifests", "mined_ms4.json")  # >= 4 single mutants (v5); mined.json: first >= 8 set
+MIN_SINGLE = 4          # single-substitution entities per accession (facet cut)
 MAX_LEN = 500           # residues; longer entities rarely have PDB-format files
 MAX_WT_PER_FORM = 40    # plenty for a noise floor; caps e.g. CA II
 FAMILY_IDENTITY = 0.3
