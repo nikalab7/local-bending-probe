@@ -370,7 +370,7 @@ def form_stats(structs, wts, cons, prior):
     Returns dict(per={s: (median bend, raw sigma, n, WT window B z)}, pooled,
     prior={s: prior sigma}, slope, wts) or None (too few WT crystals).
     """
-    if len(wts) < MIN_WT:
+    if len(wts) < MIN_WT or not cons:
         return None
     bz = [bz_of(structs[p]) for p in wts]
     per = {}
