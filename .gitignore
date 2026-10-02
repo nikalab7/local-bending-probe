@@ -12,3 +12,6 @@ __pycache__/
 
 # test cache
 .pytest_cache/
+
+# predict.py downloads of query structures
+results/_*.pdb
