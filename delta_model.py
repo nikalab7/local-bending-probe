@@ -102,6 +102,7 @@ CONTRASTS = [("site", "site+subst", "subst_over_site"),   # context-free "what" 
              ("site+esm_where", "site+esm", "esm_what_over_where")]
 HGB_SETS = ("site", "where", "where+what")             # boosting only where informative
 FAMILY_FOLDS = 10
+CONFIDENT_LO, CONFIDENT_HI = 1.0, 3.0   # |z| < 1 or > 3: labels that rarely flip
 
 
 # -------------------------------- features ----------------------------------
@@ -189,14 +190,32 @@ def make_model(kind):
                                           random_state=0)
 
 
-def oof_predict(X, y, fold_of, kind):
+def fit_model(kind, X, y, w=None):
+    m = make_model(kind)
+    if w is None:
+        return m.fit(X, y)
+    key = "logisticregression__sample_weight" if kind == "logreg" else "sample_weight"
+    return m.fit(X, y, **{key: w})
+
+
+def label_weights(z, zthr):
+    """Training weight = label confidence: |z| far from the threshold counts more.
+
+    Split-half reliability shows borderline labels (|z| near Z_MOVER) flip
+    between independent crystal sets; |z| < 1 or > 3 rarely do. Clipped to
+    [0.25, 3] so no row is ignored or dominates.
+    """
+    return np.clip(np.abs(np.abs(np.asarray(z, float)) - zthr), 0.25, 3.0)
+
+
+def oof_predict(X, y, fold_of, kind, w=None):
     """Out-of-fold probabilities; folds whose train split is one-class are NaN."""
     p = np.full(len(y), np.nan)
     for f in np.unique(fold_of):
         te = fold_of == f; tr = ~te
         if len(np.unique(y[tr])) < 2:
             continue
-        m = make_model(kind).fit(X[tr], y[tr])
+        m = fit_model(kind, X[tr], y[tr], None if w is None else w[tr])
         p[te] = m.predict_proba(X[te])[:, 1]
     return p
 
@@ -211,7 +230,7 @@ def site_folds(groups, k, seed):
 
 
 def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
-             kinds=("logreg", "hgb"), proteins=None):
+             kinds=("logreg", "hgb"), proteins=None, weights=None, confident=None):
     """Out-of-fold AUCs + paired contrasts.
 
     leave_site_out   : (protein, residue) groups in k folds, averaged over repeats
@@ -219,6 +238,8 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
                        FAMILY_FOLDS folds (leave-one-family-out if fewer)
     within-protein AUC (if proteins given): only mover/non-mover pairs from the
     same protein are compared, so protein-level base rates cannot help.
+    weights: per-row training weights (label_weights); confident: boolean mask
+    of reliable labels, on which AUC is reported as well.
     """
     from sklearn.metrics import average_precision_score
     feature_sets = feature_sets or FEATURE_SETS
@@ -232,9 +253,9 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
         for kind in kinds:
             if kind == "hgb" and name not in HGB_SETS:
                 continue
-            P = np.nanmean([oof_predict(X, y, site_folds(groups, k, s), kind)
+            P = np.nanmean([oof_predict(X, y, site_folds(groups, k, s), kind, weights)
                             for s in range(repeats)], axis=0)
-            Q = oof_predict(X, y, site_folds(families, min(FAMILY_FOLDS, n_fam), 0), kind) \
+            Q = oof_predict(X, y, site_folds(families, min(FAMILY_FOLDS, n_fam), 0), kind, weights) \
                 if n_fam > 1 else np.full(len(y), np.nan)
             preds[(name, kind)] = (P, Q)
             res = {}
@@ -247,6 +268,12 @@ def evaluate(F, y, groups, families, k=5, repeats=5, feature_sets=None,
                                movers=int(y[ok].sum()), clusters=ncl,
                                ap=float(average_precision_score(y[ok], pr[ok])),
                                base=float(y[ok].mean()))
+                if confident is not None:
+                    c = ok & np.asarray(confident)
+                    if 0 < y[c].sum() < c.sum():
+                        ca, clo, chi, _ = cluster_auc_ci(y[c], pr[c], groups[c], n_boot=1000)
+                        res[cv].update(auc_confident=ca, conf_lo=clo, conf_hi=chi,
+                                       n_confident=int(c.sum()))
                 if proteins is not None:
                     w, wlo, whi = within_auc_ci(y[ok], pr[ok], np.asarray(proteins)[ok],
                                                 groups[ok])
@@ -387,7 +414,10 @@ def main():
         print("too few movers or non-movers to evaluate"); return
 
     F = featurize(rows)
-    results, contrasts = evaluate(F, y, groups, families, proteins=proteins)
+    z = np.array([x["z"] for x in rows])
+    confident = (np.abs(z) > CONFIDENT_HI) | (np.abs(z) < CONFIDENT_LO)
+    results, contrasts = evaluate(F, y, groups, families, proteins=proteins,
+                                  weights=label_weights(z, zthr), confident=confident)
     nc = null_control(null, zthr)
     decomp = {}
     if nc and nc.get("movers", 0) >= 10:
@@ -402,6 +432,8 @@ def main():
         for cv, m in res.items():
             w = (f"  within-protein={m['within']:.3f} [{m['within_lo']:.2f},{m['within_hi']:.2f}]"
                  if "within" in m else "")
+            if "auc_confident" in m:
+                w += f"  confident={m['auc_confident']:.3f} [{m['conf_lo']:.2f},{m['conf_hi']:.2f}]"
             print(f"  {key:20s} {cv:17s} AUC={m['auc']:.3f} 90%CI[{m['lo']:.2f},{m['hi']:.2f}] "
                   f"AP={m['ap']:.3f} (base {m['base']:.2f}){w}")
     print("\n  paired dAUC (richer - base): subst_over_site, site_over_ss, "

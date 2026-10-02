@@ -336,10 +336,16 @@ def load_manifest():
 
 
 def main():
+    global MANIFEST
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-single", type=int, default=MIN_SINGLE)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--manifest", default=None,
+                    help="manifest path (default: %s); a new path with a new "
+                         "--min-single builds a new pinned set" % MANIFEST)
     args = ap.parse_args()
+    if args.manifest:
+        MANIFEST = args.manifest
     man = load_manifest()
     if man is None:
         man = build_manifest(args.min_single, args.workers)
