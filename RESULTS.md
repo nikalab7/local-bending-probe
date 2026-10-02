@@ -382,6 +382,46 @@ Learning curve (site, logreg): with 25 / 50 / 75 / 100% of training families, fa
 4. *Accuracy ceiling.* Best model ≈ 0.63 family-out (boosting alone: 0.69 within-protein) against an oracle ≈ 0.76 on single-crystal-like labels. Models now capture roughly half of the achievable margin above chance. Two levers remain for the other half: better labels (replicate mutant crystals; 85% of labels rest on one crystal) and more proteins. The learning curve says the second lever is weak.
 5. The best variant was picked from about 12 (6 learners × 2 feature sets), so 0.630 is slightly optimistic. The pre-specified logreg numbers are the ones to quote.
 
+## v5 — confidence-weighted training, expanded set, final model
+
+**What changed.**
+- *Training weights:* each training row is weighted by label confidence, |z| distance from the threshold (`delta_model.label_weights`). Split-half showed that borderline labels flip between independent crystal sets.
+- *Second accuracy metric:* AUC on **confident labels** (|z| > 3 vs |z| < 1), i.e. how well the model separates mutations whose label is not in doubt.
+- *Expanded miner set:* the miner threshold is ≥ 4 single-substitution entities (`manifests/mined_ms4.json`; v3/v4 used ≥ 8). That gives 447 mined proteins in 322 families.
+- *Family caveat:* one 36-protein family (F003) chains unrelated folds through single-linkage. This only makes family hold-out stricter.
+
+**Data.** 1250 clean mutations, 332 movers (26.6%), 895 sites, 319 proteins, 250 families. WT-vs-WT null: 2.6% false positives (n = 4071), ≤ 4.5% in every n_wt bin. Split-half: corr(z) 0.75, κ 0.35, direction agreement 100%, **oracle AUC 0.75**.
+
+**Delta model** (leave-family-out, confidence-weighted, 90% residue-cluster CIs):
+
+| features | model | AUC, all labels | AUC, confident labels | within-protein |
+|---|---|---|---|---|
+| SS only | logreg | 0.539 [0.50, 0.57] | 0.550 | 0.527 |
+| site | logreg | 0.625 [0.59, 0.66] | 0.684 [0.64, 0.73] | 0.646 |
+| site + subst | logreg | **0.639** [0.61, 0.67] | **0.714** [0.67, 0.76] | 0.634 |
+| where (site + full-atom context) | hgb | 0.624 [0.59, 0.65] | 0.719 [0.68, 0.76] | 0.654 |
+| where + what | logreg | 0.633 [0.60, 0.66] | 0.706 [0.66, 0.75] | 0.593 |
+| where + what | hgb | 0.631 [0.60, 0.66] | 0.724 [0.68, 0.76] | 0.686 |
+| site + ESM-2 | logreg | 0.625 [0.59, 0.66] | 0.673 | 0.628 |
+| ensemble logreg + hgb, where + what (`model_variants.py`) | — | 0.649 [0.62, 0.68] | — | 0.680 |
+
+| paired contrast (logreg, family-out) | ΔAUC |
+|---|---|
+| site − SS | +0.086 [+0.05, +0.12] |
+| (site + subst) − site | +0.014 [−0.00, +0.03] |
+| (where + what) − where | +0.018 [−0.00, +0.04] |
+| ESM-2 substitution LLR − ESM-2 site terms | +0.002 [−0.01, +0.01] |
+
+Noise decomposition (site): the noise score reaches 0.556 on real labels; site features add **+0.072 [+0.03, +0.11]** beyond it. Learning curve (site, 25 / 50 / 75 / 100% of training families): 0.596 / 0.611 / 0.618 / 0.620. **It is saturated:** 60% more proteins than v4 lifted AUC by about 0.03, and further families now add almost nothing.
+
+**Final model** (`predict.py train`): site + subst logistic regression, confidence-weighted, with Platt calibration on out-of-fold scores. Leave-family-out AUC **0.639 [0.61, 0.67]**, **0.716 [0.67, 0.76]** on confident labels, within-protein 0.635. `predict.py score --pdb ID --chain A --mut L99A,...` ranks mutations on any WT structure.
+
+**Reading (final).**
+1. **Mutation-induced local backbone movement is real and calibrated.** 26.6% of clean single mutations move a 5-residue window beyond crystal noise, against 2.6% of WT-vs-WT pseudo-mutants.
+2. **"Where" is the information.** Site context (straight WT window, burial, non-local contacts) separates movers from non-movers at AUC ≈ 0.63 on all labels and ≈ 0.70 on confident ones, beyond SS (+0.09), and most of it is movement rather than noise.
+3. **"What" (the local sequence change) adds ≈ 0.01–0.02 AUC once "where" is known**, whether it is described physically or by an evolutionary language model. The original hypothesis, that local sequence drives which mutations bend the backbone, is rejected at this resolution.
+4. **Ceiling.** Labels support at most AUC ≈ 0.75. The final model reaches 0.64, about 55% of the achievable margin above chance. The learning curve is flat and every model variant is within ±0.02, so the remaining gap is label noise (85% single-crystal labels), not model capacity or data volume.
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°
@@ -439,3 +479,8 @@ Learning curve (site, logreg): with 25 / 50 / 75 / 100% of training families, fa
 > all movement (excess over a noise score +0.087 [+0.04, +0.13]). Substitution identity
 > adds at most ~0.01–0.03, and only as substitution × structure terms; ESM-2 adds nothing.
 > Best model AUC ≈ 0.63 (family hold-out) against a label-reliability ceiling ≈ 0.76.
+>
+> **v5 (final; 1250 mutations, 319 proteins, 250 families, confidence-weighted):** site +
+> substitution logistic regression reaches AUC 0.64 [0.61, 0.67] with whole families held
+> out, and 0.71 on confident labels; the substitution's own share is +0.014. The learning
+> curve is saturated and the label ceiling is ≈ 0.75. `predict.py` ships the model.
