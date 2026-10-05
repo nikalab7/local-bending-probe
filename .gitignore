@@ -16,3 +16,6 @@ __pycache__/
 
 # predict.py downloads of query structures
 results/_*.pdb
+
+# final_eval.py label/feature cache (rebuilt from the PDB caches)
+results/_cache/

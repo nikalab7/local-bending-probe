@@ -66,6 +66,57 @@ An exact comparison needs AlphaFold run on this dataset, which requires a GPU.
   python predict.py score --pdb 2LZM --chain A --mut L99A,T26E
   ```
 
+## Decision log
+
+Every decision that shaped the final pipeline: what was decided, why, on which data, and what was rejected. "Dev" = the data of `pairs.load_proteins()` (T4L, the four validation proteins and the mined proteins); every decision below was made on dev data, so dev numbers are exploratory. The lockbox (PROTOCOL.md) was not used for any of them.
+
+### Labels
+| # | decision | why | data | rejected alternatives |
+|---|---|---|---|---|
+| L1 | Compare a mutant only with WT crystals of the **same crystal form** (space group + cell within tolerance) | different lattices bend windows differently; mixing forms inflated "movers" | T4L + validation proteins (v2) | all WT crystals pooled |
+| L2 | **Ligand state** must match near the window (8 A); WT filter "prefer" (applied when >= 3 clean WT remain); common additives ignored | ligands next to the window move it; additives (SO4, Cl, GOL, EDO, BME...) did not add null false positives (3.1% vs 3.9%) | dev, v2-v4 ligand audit | mutant-only rule (asymmetric); "strict" WT filter (loses too many forms); counting additives as ligands (dropped ~190 crystals for nothing) |
+| L3 | **One row per mutation** (mutant crystals of a mutation aggregated) | T4L L99A soaks alone gave 61/248 rows in the original set | T4L (v2) | one row per mutant crystal |
+| L4 | Resolution <= 2.5 A on both sides | low-resolution backbones add noise | v2 | 3.0 A cut |
+| L5 | sigma = **SD / c4** | 1.4826 x MAD is biased low at n = 3-4 (17-20% null FP in those bins); MAD/Qn ignore minority WT states (5-7% null FP vs 3-4% for SD) | dev WT-vs-WT null (v4) | MAD, corrected MAD, Qn |
+| L6 | **B-factor-conditioned prior** (log-linear in window B, K = 4 shrinkage) | few-crystal sigma is unstable; flexible windows are noisier | dev (v2-v4) | pooled prior (made site-only hgb score below chance and produced spurious contrasts); no shrinkage; WT bend as a second prior covariate (confounds the strongest feature) |
+| L7 | Exact small-sample **median efficiency** for the mutant side, **Student-t** calibration (nu = n - 1 + K) | asymptotic 1.2533 is wrong at m = 1 (85% of rows); sigma uncertainty gives t tails (6-8% null FP) | dev null (v4) | normal calibration |
+| L8 | **NCS averaging** of identical-sequence copies (>= 80% coverage) | free replicates: split-half kappa 0.31 -> 0.37, oracle AUC 0.724 -> 0.771 | dev (v6) | first chain only |
+| L9 | **Combined label**: max \|z\| over bend, phi, psi, CA torsion b; threshold 2.61 so that the WT-vs-WT null FP equals the single-metric rate (~2.6%) | most reliable (kappa 0.51, oracle 0.787) and most predictable (AUC 0.662) of the five labels compared | dev (v6) | bend only (0.639 / 0.724), bend + NCS (0.646 / 0.771), phi + NCS (0.648 / 0.734), psi + NCS (0.611 / 0.770), CA torsion a; sum or mean of z over metrics; thresholds 2 and 3 on the raw max |
+| L10 | Mover = \|z\| > 2 (after rescaling) | conventional; null-calibrated | dev | 3 (too few movers), continuous \|z\| as primary target (kept only as a ridge variant) |
+
+### Data and splits
+| # | decision | why | data | rejected alternatives |
+|---|---|---|---|---|
+| D1 | Systematic miner: UniProt accessions with **>= 4 single-substitution entities**, SIFTS mapping, pre-screen for a usable form | the gate proteins were too few (4 proteins, wide CIs) | RCSB (v3, v5) | hand-picked proteins only; >= 5 entities (v3, 191 proteins; lowered to 4 in v5 for 319 proteins) |
+| D2 | **Families** = >= 30%-identity clusters (RCSB MMseqs2 search), linked only through exact reference-sequence hits | linking through any hit merged unrelated proteins via chimeric constructs | dev (v3 fix) | PDB-ID or accession as the hold-out unit; CATH/Pfam (not tried: sequence clustering covers every protein, including constructs without a domain assignment) |
+| D3 | **Leave-family-out**, 10 folds of whole families, as the primary CV | site-out leaks family-level information | dev | leave-site-out (reported as secondary until v5), leave-one-protein-out |
+| D4 | **Lockbox** = accessions with 1-3 single-substitution entities (never loaded by the dev miner) and no >= 30% hit to any dev protein; one run | every dev family was used in some decision (label comparison, feature choice, error analysis), so none is clean | RCSB (this protocol) | re-using held-out dev folds (all were looked at); a time split (not tried) |
+
+### Features
+| # | decision | why | data | rejected alternatives |
+|---|---|---|---|---|
+| F1 | **SITE** (C-alpha site context) | beats SS by +0.07 to +0.09 (paired); signal survives the noise decomposition (+0.07 beyond a noise score) | dev (v3-v5) | SS only (at chance) |
+| F2 | **SUBST** (context-free substitution descriptors) kept | small but consistent gain (+0.014 [-0.00, +0.03]) and needed to state the "what vs where" result | dev (v4, v5) | site only |
+| F3 | Full-atom CONTEXT and substitution x context INTERACT **not** in the final model | where - site = -0.023 [-0.04, -0.00] (logreg); the best variant (hgb/ensemble on where + what, 0.649) was chosen after the fact among ~12 variants | dev (v4, v5) | where, where + what (logreg and hgb), ensembles |
+| F4 | ESM-2 site log-probabilities and LLR **rejected** | +0.002 [-0.01, +0.01] | dev (v4, v5) | site + ESM terms |
+| F5 | ESM-2 per-residue **embeddings rejected** | PCA 8/16/32/64 components over site + subst: -0.009 to +0.001, all CIs span 0; embeddings alone 0.591 (-0.057) | dev, bend + NCS labels (this round) | any PC count |
+| F6 | ENM mechanics (ANM site MSF, window bend response) — ENM_DECISION | ENM_WHY | dev, bend + NCS labels (this round) | ENM_REJECTED |
+| F7 | Lattice contacts, temperature, resolution gap, altlocs are **diagnostics only**, never inputs | user rule 3: mutant-side information is forbidden; lattice/temperature/altlocs describe the experiment, not the protein | — | using them as covariates (would leak experiment-specific information) |
+
+### Model and training
+| # | decision | why | data | rejected alternatives |
+|---|---|---|---|---|
+| M1 | **Logistic regression, C = 0.3**, balanced classes, median imputation, standardization | nested CV picks the same C (0.000 difference); boosting is not better at this n | dev (v4, model_variants) | nested-C logreg, ridge on \|z\|, HGB, ensembles, per-SS models and SS x feature interactions (both lowered AUC) |
+| M2 | **Confidence weights** clip(\| \|z\| - 2 \|, 0.25, 3) | split-half: borderline labels (\|z\| near 2) flip between independent crystal sets, \|z\| < 1 or > 3 rarely do | dev (v4 split-half; adopted in v5) | unweighted; dropping borderline rows |
+| M3 | Baselines **SS-only** and **burial-only** (hse_up + n_ca10), same model class | user rule 5 | — | — |
+
+### Evaluation
+| # | decision | why | data | rejected alternatives |
+|---|---|---|---|---|
+| E1 | Family-bootstrap 95% CIs; paired family-bootstrap dAUC for every comparison | rows within a family are correlated; earlier runs used residue-cluster 90% CIs (v4 showed they agree with family resampling) | — | row bootstrap; residue-cluster bootstrap |
+| E2 | Headline = lockbox AUC next to the 0.787 ceiling and both baselines; within-protein AUC; with/without T4L; positive (helix) and negative (shuffled within family) controls; power analysis; artifact exclusions as diagnostics | user rules 5-7 | — | — |
+| E3 | No result from groups with < 30 rows or < 10 per class | user rule 6 | — | — |
+
 ## Running / next
 - ESM-2 embedding test (running)
 - Artifacts: crystal contacts, data-collection temperature, resolution gap, altlocs (running)

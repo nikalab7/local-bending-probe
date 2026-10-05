@@ -643,3 +643,21 @@ def test_lockbox_disjoint_from_dev():
     assert not dev_seq & {v["reference"] for v in lb["proteins"].values()}
     dev_pdb = {p for v in dev["proteins"].values() for p in v["entries"]}
     assert not dev_pdb & {p for v in lb["proteins"].values() for p in v["entries"]}
+
+
+def test_final_eval_shuffle_within_family_and_power():
+    """Negative-control shuffles stay inside families; power output is sane."""
+    import final_eval as fe
+    rng = np.random.default_rng(0)
+    fam = np.repeat(np.array(["a", "b", "c", "d"]), [5, 7, 3, 9])
+    idx = fe.shuffle_within(fam, rng)
+    assert sorted(idx) == list(range(len(fam)))
+    assert (fam[idx] == fam).all()
+    fam = np.repeat(np.arange(40).astype(str), 10)
+    y = rng.random(400) < 0.3
+    s = y + rng.normal(0, 1, 400)
+    fe.N_BOOT = 200
+    p = fe.power(y, s, rng.normal(0, 1, 400), fam)
+    assert abs(p["n_eff_families"] - 40) < 1e-9
+    assert 0.5 < p["min_detectable_auc"] < 0.75
+    assert not fe.reportable(y[:20]) and fe.reportable(y)
