@@ -233,6 +233,68 @@ def ss_span_of(helix, sheet, chain, r):
 
 _CACHE = {}
 _LATTICE = {}
+_ENM = {}
+ENM = ["enm_msf_site", "enm_bend_response", "enm_bend_response_rel"]
+ENM_CUTOFF = 15.0      # Angstrom, ANM spring cutoff between C-alphas
+
+
+def _anm_pinv(ca):
+    """Pseudo-inverse of the anisotropic-network Hessian (6 rigid-body modes removed)."""
+    n = len(ca)
+    d = ca[:, None, :] - ca[None, :, :]
+    r2 = (d ** 2).sum(-1)
+    contact = (r2 < ENM_CUTOFF ** 2) & ~np.eye(n, dtype=bool)
+    H = np.zeros((3 * n, 3 * n))
+    for i, j in zip(*np.nonzero(np.triu(contact))):
+        e = d[i, j] / np.sqrt(r2[i, j])
+        block = -np.outer(e, e)
+        H[3*i:3*i+3, 3*j:3*j+3] = block
+        H[3*j:3*j+3, 3*i:3*i+3] = block
+        H[3*i:3*i+3, 3*i:3*i+3] -= block
+        H[3*j:3*j+3, 3*j:3*j+3] -= block
+    w, v = np.linalg.eigh(H)
+    keep = w > 1e-6 * max(w.max(), 1e-12)
+    keep[:6] = False
+    return (v[:, keep] / w[keep]) @ v[:, keep].T
+
+
+def enm_features(res, r, s, n_dir=12):
+    """Mechanics of the WT scaffold (C-alpha anisotropic network model).
+
+    enm_msf_site          mean-square fluctuation of residue r, relative to the chain mean
+    enm_bend_response     |change of the window bend angle| per unit force applied at r,
+                          averaged over n_dir directions (perturbation response)
+    enm_bend_response_rel the same, relative to the median over all windows of the chain
+    """
+    from bending_metric import bending_angle
+    key = id(res)
+    nums = sorted(res)
+    if key not in _ENM:
+        ca = np.array([res[k][1] for k in nums])
+        _ENM[key] = (_anm_pinv(ca), ca, {k: i for i, k in enumerate(nums)}, {})
+    G, ca, idx, resp_cache = _ENM[key]
+    if r not in idx or any(w not in idx for w in range(s, s + 5)):
+        return {k: np.nan for k in ENM}
+    msf = np.array([np.trace(G[3*i:3*i+3, 3*i:3*i+3]) for i in range(len(nums))])
+    dirs = np.random.default_rng(0).normal(size=(n_dir, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+
+    def response(rr, ss_):
+        if (rr, ss_) in resp_cache:
+            return resp_cache[(rr, ss_)]
+        i = idx[rr]; win = [idx[w] for w in range(ss_, ss_ + 5)]
+        b0 = bending_angle(ca[win]); out = []
+        for u in dirs:
+            dx = (G[:, 3*i:3*i+3] @ u).reshape(-1, 3)
+            eps = 0.1 / max(np.abs(dx[win]).max(), 1e-9)       # small, linear-regime step
+            out.append(abs(bending_angle(ca[win] + eps * dx[win]) - b0) / eps)
+        resp_cache[(rr, ss_)] = float(np.mean(out))
+        return resp_cache[(rr, ss_)]
+    resp = response(r, s)
+    ref = [response(k + 2, k) for k in nums[::5] if k + 2 in idx and all(w in idx for w in range(k, k + 5))]
+    return dict(enm_msf_site=float(msf[idx[r]] / msf.mean()),
+                enm_bend_response=resp,
+                enm_bend_response_rel=float(resp / np.median(ref)) if ref else np.nan)
 
 
 def lattice_contacts(path, chain, r, s, cutoff=4.0):
@@ -288,4 +350,5 @@ def row_features(x):
     out.update(interaction_features(ctx, x["wt"], x["mut"], x["scaffold_ss"]))
     out["lattice_site"], out["lattice_window"] = lattice_contacts(
         x["scaffold_path"], x["scaffold_chain"], x["r"], x["s"])
+    out.update(enm_features(x["scaffold_res"], x["r"], x["s"]))
     return out

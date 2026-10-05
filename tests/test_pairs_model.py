@@ -527,3 +527,23 @@ def test_ncs_average():
     finally:
         pairs.NCS_AVERAGE = old
     assert abs(v - (a + b) / 2) < 1e-9 and abs(a - b) > 1.0
+
+
+def test_enm_features_on_helix():
+    import structure_features as sf
+    ca = ideal_helix()
+    res = {i + 1: ("A", ca[i], 20.0) for i in range(N_RES)}
+    f = sf.enm_features(res, 30, 28)
+    assert all(np.isfinite(v) for v in f.values())
+    assert f["enm_msf_site"] > 0 and f["enm_bend_response"] > 0
+    # chain ends fluctuate more than the middle in an elastic network
+    end = sf.enm_features(res, 3, 1)["enm_msf_site"]
+    assert end > f["enm_msf_site"]
+
+
+def test_lattice_contacts_runs():
+    import structure_features as sf
+    d = tempfile.mkdtemp(); p = os.path.join(d, "x.pdb")
+    write_pdb(p, SEQ, ideal_helix(), "A", 1.8)
+    site, win = sf.lattice_contacts(p, "A", 30, 28)
+    assert (np.isnan(site) and np.isnan(win)) or (0 <= site <= win)
