@@ -495,7 +495,7 @@ def form_stats(structs, wts, cons, prior):
             v = bend_of(structs[p], s)
             if v is None:
                 continue
-            zw = np.array([z[w] for w in range(s, s + 5)])
+            zw = np.array([z.get(w, np.nan) for w in range(s, s + 5)])
             clean = typical is None or near_hets(structs[p], structs[p]["res"], s) == typical
             obs.append((v, float(zw[np.isfinite(zw)].mean()) if np.isfinite(zw).any()
                         else np.nan, clean))
