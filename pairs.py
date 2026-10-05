@@ -126,7 +126,7 @@ def parse_structure(path):
     """
     out = dict(resolution=None, spacegroup=None, cell=None,
                helix=set(), sheet=set(), hets=[])
-    best = {}
+    best, bb_best = {}, {}
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt") as fh:
         for line in fh:
@@ -170,7 +170,22 @@ def parse_structure(path):
                 except ValueError:
                     pass
             elif rec == "ATOM  ":
-                if line[12:16].strip() != "CA":
+                name = line[12:16].strip()
+                if name in ("N", "C"):
+                    if THREE2ONE.get(line[17:20].strip()) is None or line[26] != " ":
+                        continue
+                    try:
+                        rs = int(line[22:26])
+                        xyz = np.array([float(line[30:38]), float(line[38:46]),
+                                        float(line[46:54])])
+                        occ = float(line[54:60]) if line[54:60].strip() else 1.0
+                    except ValueError:
+                        continue
+                    k = (line[21], rs, name)
+                    if k not in bb_best or occ > bb_best[k][0]:
+                        bb_best[k] = (occ, xyz)
+                    continue
+                if name != "CA":
                     continue
                 aa = THREE2ONE.get(line[17:20].strip())
                 if aa is None or line[26] != " ":
@@ -190,6 +205,10 @@ def parse_structure(path):
     for (ch, rs), (_, aa, xyz, bf) in best.items():
         chains.setdefault(ch, {})[rs] = (aa, xyz, bf)
     out["chains"] = chains
+    backbone = {}
+    for (ch, rs, name), (_, xyz) in bb_best.items():
+        backbone.setdefault(ch, {}).setdefault(rs, {})[name] = xyz
+    out["backbone"] = backbone
     return out
 
 
@@ -282,13 +301,107 @@ def fit_sigma_prior(sig, bw, n, pooled):
     return np.clip(np.exp(a + b * bwf), lo, hi), b
 
 
+def _dihedral(p0, p1, p2, p3):
+    b0, b1, b2 = p0 - p1, p2 - p1, p3 - p2
+    b1 = b1 / np.linalg.norm(b1)
+    v = b0 - np.dot(b0, b1) * b1
+    w = b2 - np.dot(b2, b1) * b1
+    return float(np.degrees(np.arctan2(np.dot(np.cross(b1, v), w), np.dot(v, w))))
+
+
+def _ca_torsion(res, s, first):
+    win = [s + k for k in range(5)]
+    if any(w not in res for w in win):
+        return None
+    pts = np.array([res[w][1] for w in win])
+    if not is_continuous(pts):
+        return None
+    return _dihedral(*pts[first:first + 4])
+
+
+def _phi_psi(st, s, which):
+    """phi or psi of the window's centre residue r = s + 2 from N, CA, C atoms."""
+    r = s + 2
+    bb = st.get("backbone", {}).get(st["chid"], {})
+    res = st["res"]
+    try:
+        if which == "phi":
+            p = (bb[r - 1]["C"], bb[r]["N"], res[r][1], bb[r]["C"])
+            if np.linalg.norm(p[0] - p[1]) > 2.0:
+                return None
+        else:
+            p = (bb[r]["N"], res[r][1], bb[r]["C"], bb[r + 1]["N"])
+            if np.linalg.norm(p[2] - p[3]) > 2.0:
+                return None
+    except KeyError:
+        return None
+    return _dihedral(*p)
+
+
+# Window metrics the label can be built on. Each takes (structure, s) and
+# returns a scalar or None; circular ones are angles in degrees, handled on a
+# per-window reference so that +179 and -179 are 2 degrees apart.
+METRICS = {
+    "bend":     (lambda st, s: window_bend(st["res"], s), False),   # canonical
+    "ca_tor_a": (lambda st, s: _ca_torsion(st["res"], s, 0), True),  # CA r-2..r+1
+    "ca_tor_b": (lambda st, s: _ca_torsion(st["res"], s, 1), True),  # CA r-1..r+2
+    "phi":      (lambda st, s: _phi_psi(st, s, "phi"), True),
+    "psi":      (lambda st, s: _phi_psi(st, s, "psi"), True),
+}
+METRIC = "bend"
+# Average the metric over NCS copies (chains of the same crystal with the same
+# sequence): copies differ by coordinate error and local packing, so their mean
+# is a less noisy per-crystal value. Circular metrics average on the main chain's
+# frame.
+NCS_AVERAGE = False
+NCS_MIN_COVER = 0.8
+
+
+def ncs_copies(st):
+    """Chains of this crystal that repeat the selected chain (cached)."""
+    if "_ncs" not in st or st["_ncs"][0] != st["chid"]:
+        main = st["res"]
+        copies = []
+        for c, res in st["chains"].items():
+            if c == st["chid"]:
+                continue
+            common = set(main) & set(res)
+            if len(common) >= NCS_MIN_COVER * len(main) and \
+                    all(main[k][0] == res[k][0] for k in common):
+                copies.append(c)
+        st["_ncs"] = (st["chid"], copies)
+    return st["_ncs"][1]
+
+
+def wrap(a):
+    return (np.asarray(a, float) + 180.0) % 360.0 - 180.0
+
+
 def bend_of(st, s):
-    """window_bend of the selected chain, cached on the structure dict."""
+    """Value of the label METRIC for window s of the selected chain (cached)."""
     cache = st.setdefault("_bend", {})
-    key = (st["chid"], s)
+    key = (st["chid"], s, METRIC, NCS_AVERAGE)
     if key not in cache:
-        cache[key] = window_bend(st["res"], s)
+        fn, circular = METRICS[METRIC]
+        v = fn(st, s)
+        if NCS_AVERAGE and v is not None:
+            others = []
+            for c in ncs_copies(st):
+                view = dict(st, chid=c, res=st["chains"][c])
+                u = fn(view, s)
+                if u is not None:
+                    others.append(float(wrap(u - v)) if circular else u - v)
+            if others:
+                v = v + float(np.sum(others)) / (len(others) + 1)
+                v = float(wrap(v)) if circular else v
+        cache[key] = v
     return cache[key]
+
+
+def rel(W, s, v):
+    """A metric value on the window's reference frame (identity unless circular)."""
+    ref = W["per"][s][4]
+    return v if ref is None else float(wrap(v - ref))
 
 
 def bz_of(st):
@@ -393,10 +506,15 @@ def form_stats(structs, wts, cons, prior):
         bws = [o[1] for o in obs]
         if len(vals) >= MIN_WT:
             vals = np.array(vals)
+            ref = None
+            if METRICS[METRIC][1]:
+                rad = np.radians(vals)
+                ref = float(np.degrees(np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())))
+                vals = wrap(vals - ref)
             med = float(np.median(vals))
             bws = np.array(bws)
             bw = float(np.median(bws[np.isfinite(bws)])) if np.isfinite(bws).any() else np.nan
-            per[s] = (med, sigma_hat(vals), len(vals), bw)
+            per[s] = (med, sigma_hat(vals), len(vals), bw, ref)
     if not per or not any(v[1] > 0 for v in per.values()):
         return None
     pooled = float(np.mean([v[1] for v in per.values()]))
@@ -408,6 +526,13 @@ def form_stats(structs, wts, cons, prior):
         pr, slope = np.full(len(keys), pooled), 0.0
     return dict(per=per, pooled=pooled, wts=wts, slope=slope,
                 prior=dict(zip(keys, map(float, pr))))
+
+
+def wt_window_bend(structs, wts, s):
+    """Median C-alpha bend of the WT crystals at window s (the wt_bend feature)."""
+    v = [window_bend(structs[p]["res"], s) for p in wts]
+    v = [x for x in v if x is not None]
+    return float(np.median(v)) if v else float("nan")
 
 
 def typical_hets(structs, wts, s):
@@ -429,7 +554,7 @@ def calibrated_z(t_stat, n):
 
 def label(W, s, bends):
     """(delta, se, z, sigma, sigma_prior) of mutant bends vs form stats W at window s."""
-    wt_med, sig_hat, n, _ = W["per"][s]
+    wt_med, sig_hat, n = W["per"][s][:3]
     sig_prior = W["prior"][s]
     sig = float(np.sqrt((n * sig_hat ** 2 + SHRINK_K * sig_prior ** 2) / (n + SHRINK_K)))
     m = len(bends)
@@ -526,7 +651,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
             diag["variant_window_outside_consensus"] += 1
             continue
         W = wt_stats[f]
-        wt_med, sig_hat, n, bw_wt = W["per"][s]
+        wt_med, sig_hat, n, bw_wt = W["per"][s][:4]
         # ligand state that is normal for this form at this window
         typical = typical_hets(structs, W["wts"], s)
         bends, used, lig_drop = [], [], 0
@@ -536,7 +661,7 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
                 continue
             b = bend_of(structs[p], s)
             if b is not None:
-                bends.append(b); used.append(p)
+                bends.append(rel(W, s, b)); used.append(p)
         diag["mutant_crystals_ligand_mismatch"] += lig_drop
         if not bends:
             diag["variant_form_no_clean_crystal"] += 1
@@ -551,7 +676,9 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
                        key=lambda p: (structs[p]["resolution"], -len(structs[p]["res"])))
         cand[mut].append(dict(
             protein=protein, family=family or protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
-            n_wt=n, n_mut=m, wt_bend=wt_med, sigma=sig, sigma_raw=sig_hat,
+            n_wt=n, n_mut=m,
+            wt_bend=wt_med if METRIC == "bend" else wt_window_bend(structs, W["wts"], s),
+            sigma=sig, sigma_raw=sig_hat,
             sigma_prior=sig_prior, b_window_wt=bw_wt,
             delta=delta, se=se, z=float(z),
             mover=bool(abs(z) > Z_MOVER),
@@ -604,6 +731,7 @@ def null_rows(rows, structs, wt_by_form, cons, prior):
             b = bend_of(structs[h], s)
             if b is None:
                 continue
+            b = rel(W, s, b)
             delta, se, z, sig, sig_prior = label(W, s, [b])
             out.append({**x, "n_wt": W["per"][s][2], "n_mut": 1, "delta": delta,
                         "se": se, "z": float(z), "sigma": sig, "sigma_prior": sig_prior,

@@ -482,3 +482,48 @@ def test_calibrated_z_t_to_normal():
     from scipy.stats import norm, t as student_t
     nu = 3 - 1 + pairs.SHRINK_K
     assert abs(2 * norm.sf(small) - 2 * student_t.sf(2.5, nu)) < 1e-9
+
+
+def test_circular_metric_wraps_at_180():
+    """WT psi near +179 and a mutant at -179 differ by 2 degrees, not 358."""
+    W = dict(per={10: (0.0, 1.0, 9, 0.0, 179.0)}, prior={10: 1.0})
+    assert abs(pairs.rel(W, 10, -179.0) - 2.0) < 1e-9
+    assert abs(pairs.rel(W, 10, 178.0) + 1.0) < 1e-9
+    assert float(pairs.wrap(190.0)) == -170.0
+
+
+def test_phi_psi_metric_matches_structure_features():
+    phis = [-57.0, -57.0, -120.0, 60.0, -57.0, -65.0, -57.0]
+    psis = [-47.0, -47.0, 130.0, 45.0, -47.0, 140.0, -47.0]
+    d = tempfile.mkdtemp(); p = os.path.join(d, "bb.pdb")
+    _write_backbone_pdb(p, _backbone(phis, psis), "AAGGAPA")
+    st = pairs.parse_structure(p)
+    st["chid"], st["res"] = "A", st["chains"]["A"]
+    for r in (3, 4, 5):
+        assert abs(pairs.METRICS["phi"][0](st, r - 2) - phis[r - 1]) < 0.5
+        assert abs(pairs.METRICS["psi"][0](st, r - 2) - psis[r - 1]) < 0.5
+
+
+def test_ncs_average():
+    """Two identical chains: the averaged metric lies between the two copies."""
+    d = tempfile.mkdtemp(); p = os.path.join(d, "ncs.pdb")
+    ca = ideal_helix()
+    write_pdb(p, SEQ, ca, "A", 1.8)
+    ca2 = hinge(ca, 30, 10.0)
+    lines = open(p).read().splitlines()
+    extra = []
+    for i, (aa, xyz) in enumerate(zip(SEQ, ca2), start=1):
+        extra.append(f"ATOM  {i:5d}  CA  {AA3[aa]} B{i:4d}    "
+                     f"{xyz[0]:8.3f}{xyz[1]:8.3f}{xyz[2]:8.3f}{1.0:6.2f}{20.0:6.2f}           C")
+    open(p, "w").write("\n".join(lines[:-1] + extra + ["END"]) + "\n")
+    st = pairs.parse_structure(p)
+    st["chid"], st["res"] = "A", st["chains"]["A"]
+    a = pairs.window_bend(st["chains"]["A"], 28); b = pairs.window_bend(st["chains"]["B"], 28)
+    assert pairs.ncs_copies(st) == ["B"]
+    old = pairs.NCS_AVERAGE
+    try:
+        pairs.NCS_AVERAGE = True
+        v = pairs.bend_of(st, 28)
+    finally:
+        pairs.NCS_AVERAGE = old
+    assert abs(v - (a + b) / 2) < 1e-9 and abs(a - b) > 1.0
