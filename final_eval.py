@@ -48,7 +48,7 @@ import numpy as np
 
 import pairs
 import delta_model as dm
-from stats_utils import cluster_auc_ci, paired_delta_auc, within_auc_ci, fast_auc
+from stats_utils import cluster_auc_ci, within_auc_ci, fast_auc
 
 # ------------------------------ frozen settings -----------------------------
 FEATURES = dm.SITE + dm.SUBST
@@ -60,6 +60,7 @@ N_BOOT = 2000
 N_SHUFFLE_DEV = 20                  # retrained negative controls
 N_SHUFFLE_LOCKBOX = 1000            # frozen-model negative controls
 MIN_GROUP, MIN_CLASS = 30, 10
+MIN_FAMILIES = 10                   # lockbox size rule (PROTOCOL.md section 1)
 Z_A, Z_B = 1.96, 0.8416             # alpha 0.05 two-sided, power 0.8
 FROZEN_FILES = ("PROTOCOL.md", "final_eval.py", "pairs.py", "delta_model.py",
                 "structure_features.py", "plm_features.py", "stats_utils.py",
@@ -110,32 +111,38 @@ def auc_ci(y, s, fam):
     return dict(auc=a, lo=lo, hi=hi, n=int(len(y)), movers=int(np.sum(y)), families=nf)
 
 
+def _boot(fam, seed):
+    """Index arrays of family-bootstrap resamples."""
+    groups = [np.flatnonzero(fam == f) for f in np.unique(fam)]
+    rng = np.random.default_rng(seed)
+    for _ in range(N_BOOT):
+        yield np.concatenate([groups[i] for i in rng.integers(0, len(groups), len(groups))])
+
+
+def _boot_delta(y, sa, sb, fam, seed):
+    return np.array([fast_auc(y[i], sb[i]) - fast_auc(y[i], sa[i])
+                     for i in _boot(fam, seed) if 0 < y[i].sum() < len(i)])
+
+
 def paired(y, s_base, s_model, fam):
-    """dAUC = AUC(model) - AUC(base), paired family bootstrap, two-sided p."""
-    d, lo, hi, p1 = paired_delta_auc(y, s_base, s_model, fam, n_boot=N_BOOT, level=LEVEL)
-    return dict(d_auc=d, lo=lo, hi=hi, p_two_sided=float(min(1.0, 2 * min(p1, 1 - p1))),
-                p_one_sided=p1)
+    """dAUC = AUC(model) - AUC(base), paired family bootstrap.
+
+    p_two_sided = 2 x the smaller tail of the bootstrap dAUC distribution at 0.
+    """
+    d = _boot_delta(y, s_base, s_model, fam, 0)
+    a = (1 - LEVEL) / 2 * 100
+    lo, hi = np.percentile(d, [a, 100 - a])
+    return dict(d_auc=fast_auc(y, s_model) - fast_auc(y, s_base), lo=float(lo), hi=float(hi),
+                p_two_sided=float(min(1.0, 2 * min((d <= 0).mean(), (d >= 0).mean()))))
 
 
 def boot_sd(y, s, fam, seed=1):
     """Family-bootstrap SD of the AUC (its standard error under clustering)."""
-    groups = {f: np.flatnonzero(fam == f) for f in np.unique(fam)}
-    keys = list(groups); rng = np.random.default_rng(seed); b = []
-    for _ in range(N_BOOT):
-        idx = np.concatenate([groups[keys[i]] for i in rng.integers(0, len(keys), len(keys))])
-        if 0 < y[idx].sum() < len(idx):
-            b.append(fast_auc(y[idx], s[idx]))
-    return float(np.std(b))
+    return float(np.std([fast_auc(y[i], s[i]) for i in _boot(fam, seed) if 0 < y[i].sum() < len(i)]))
 
 
 def boot_sd_delta(y, sa, sb, fam, seed=1):
-    groups = {f: np.flatnonzero(fam == f) for f in np.unique(fam)}
-    keys = list(groups); rng = np.random.default_rng(seed); b = []
-    for _ in range(N_BOOT):
-        idx = np.concatenate([groups[keys[i]] for i in rng.integers(0, len(keys), len(keys))])
-        if 0 < y[idx].sum() < len(idx):
-            b.append(fast_auc(y[idx], sb[idx]) - fast_auc(y[idx], sa[idx]))
-    return float(np.std(b))
+    return float(np.std(_boot_delta(y, sa, sb, fam, seed)))
 
 
 def power(y, s, s_base, fam):
@@ -196,13 +203,16 @@ def artifact_masks(rows, F):
     rw = np.array([x.get("res_wt", np.nan) for x in rows], float)
     rm = np.array([x.get("res_mut", np.nan) for x in rows], float)
     am = np.array([x.get("altloc_mut", 0) or 0 for x in rows], float)
+    ls = X_of(F, ["lattice_site"])[:, 0]
     lw = X_of(F, ["lattice_window"])[:, 0]
     with np.errstate(invalid="ignore"):
         m = {"temperature_mismatch_gt50K": np.abs(tm - tw) > 50,
              "mutant_resolution_worse_gt0.5A": (rm - rw) > 0.5,
              "mutant_altloc_in_window": am > 0,
-             "window_in_lattice_contact": lw > 0}
+             "mutated_residue_in_lattice_contact": ls > 0}
     m["any"] = np.any(np.vstack(list(m.values())), axis=0)
+    with np.errstate(invalid="ignore"):
+        m["window_in_lattice_contact"] = lw > 0      # broad (~60% of dev rows): separate
     return m
 
 
@@ -307,7 +317,7 @@ def run_lockbox():
         scores[b] = fit(X_of(F_d, cols), D["y"], D["w"]).predict_proba(X_of(F_l, cols))[:, 1]
     R = dict(mode="lockbox", commit=commit, n=len(y), movers=int(y.sum()),
              proteins=len(set(prot)), families=len(set(fam)), null=null_fp(null_l),
-             exploratory=not reportable(y))
+             exploratory=not (reportable(y) and len(set(fam)) >= MIN_FAMILIES))
     R["headline"] = headline(y, scores, fam, prot) if 0 < y.sum() < len(y) else None
     nt = D["prot"] != "T4L"
     s_not4l = fit(X_d[nt], D["y"][nt], D["w"][nt]).predict_proba(X_l)[:, 1]
@@ -343,7 +353,8 @@ def show(R):
         wp = h["within_protein"]
         print(f"  within-protein AUC {wp['auc']:.3f} [{wp['lo']:.3f},{wp['hi']:.3f}]")
     if R.get("exploratory"):
-        print("  LOCKBOX TOO SMALL (< %d rows or < %d per class): all results exploratory" % (MIN_GROUP, MIN_CLASS))
+        print("  LOCKBOX TOO SMALL (< %d rows, < %d per class or < %d families): all results exploratory"
+              % (MIN_GROUP, MIN_CLASS, MIN_FAMILIES))
     print(f"  T4L: {json.dumps(R['t4l'], default=float)[:400]}")
     pc = R["positive_control_helix"]; nc = R["negative_control_shuffled_within_family"]
     print(f"  positive control (helix) AUC {pc['auc']:.3f} [{pc['lo']:.3f},{pc['hi']:.3f}]")

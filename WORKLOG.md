@@ -99,8 +99,10 @@ Every decision that shaped the final pipeline: what was decided, why, on which d
 | F2 | **SUBST** (context-free substitution descriptors) kept | small but consistent gain (+0.014 [-0.00, +0.03]) and needed to state the "what vs where" result | dev (v4, v5) | site only |
 | F3 | Full-atom CONTEXT and substitution x context INTERACT **not** in the final model | where - site = -0.023 [-0.04, -0.00] (logreg); the best variant (hgb/ensemble on where + what, 0.649) was chosen after the fact among ~12 variants | dev (v4, v5) | where, where + what (logreg and hgb), ensembles |
 | F4 | ESM-2 site log-probabilities and LLR **rejected** | +0.002 [-0.01, +0.01] | dev (v4, v5) | site + ESM terms |
-| F5 | ESM-2 per-residue **embeddings rejected** | PCA 8/16/32/64 components over site + subst: -0.009 to +0.001, all CIs span 0; embeddings alone 0.591 (-0.057) | dev, bend + NCS labels (this round) | any PC count |
-| F6 | ENM mechanics (ANM site MSF, window bend response) — ENM_DECISION | ENM_WHY | dev, bend + NCS labels (this round) | ENM_REJECTED |
+| F5 | ESM-2 per-residue **embeddings rejected** | PCA 8/16/32/64 components over site + subst: -0.009 to +0.001, all CIs span 0; embeddings alone 0.591 (-0.057) | dev, bend + NCS label (this round) | any PC count |
+| F6 | ENM mechanics (ANM site MSF, window bend response) **rejected** | over site + subst: -0.003 [-0.006, -0.000]; single-feature AUCs 0.45-0.51 | dev, combined label (this round) | ENM features alone or with lattice/altloc (-0.008 [-0.015, -0.002]) |
+| F6b | WT altloc fraction and lattice contacts **not inputs** | -0.001 [-0.003, +0.001] and -0.004 [-0.010, +0.001]; lattice is also an experiment property | dev, combined label | as inputs |
+| F6c | Mutant-side covariates (resolution gap, temperature gap, mutant altlocs) **forbidden** although they help | +0.018 [+0.006, +0.029]: mutants collected at room temperature against cryo WT move in 57% vs 34% of cases, mutants >0.5 A worse in 55% vs 34% -- part of the label is experiment, not protein; using them would predict the experiment | dev, combined label | as inputs (user rule 3); kept as exclusion diagnostics |
 | F7 | Lattice contacts, temperature, resolution gap, altlocs are **diagnostics only**, never inputs | user rule 3: mutant-side information is forbidden; lattice/temperature/altlocs describe the experiment, not the protein | — | using them as covariates (would leak experiment-specific information) |
 
 ### Model and training
@@ -116,6 +118,7 @@ Every decision that shaped the final pipeline: what was decided, why, on which d
 | E1 | Family-bootstrap 95% CIs; paired family-bootstrap dAUC for every comparison | rows within a family are correlated; earlier runs used residue-cluster 90% CIs (v4 showed they agree with family resampling) | — | row bootstrap; residue-cluster bootstrap |
 | E2 | Headline = lockbox AUC next to the 0.787 ceiling and both baselines; within-protein AUC; with/without T4L; positive (helix) and negative (shuffled within family) controls; power analysis; artifact exclusions as diagnostics | user rules 5-7 | — | — |
 | E3 | No result from groups with < 30 rows or < 10 per class | user rule 6 | — | — |
+| E4 | Artifact "any" exclusion = temperature gap > 50 K, mutant resolution > 0.5 A worse, mutant altlocs, mutated residue in a lattice contact; window-in-contact reported separately | window contacts cover ~60% of dev rows and are unrelated to mover rate (36% vs 36%), so they would remove most data for nothing | dev (counts and mover rates only, no model scores) | window contact inside "any" |
 
 ## Running / next
 - ESM-2 embedding test (running)
