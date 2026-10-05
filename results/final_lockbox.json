@@ -1,0 +1,223 @@
+{
+ "mode": "lockbox",
+ "commit": "f29a43513674fa9cc987803707a307a0f6889199",
+ "n": 111,
+ "movers": 30,
+ "proteins": 90,
+ "families": 89,
+ "null": {
+  "n": 214,
+  "fp": 0.04672897196261682
+ },
+ "exploratory": false,
+ "headline": {
+  "model": {
+   "auc": 0.5320987654320988,
+   "lo": 0.40332053827424563,
+   "hi": 0.6612991374434387,
+   "n": 111,
+   "movers": 30,
+   "families": 89
+  },
+  "ceiling_oracle_auc_dev": 0.787,
+  "ss_only": {
+   "auc": 0.5304526748971193,
+   "lo": 0.41109020770408256,
+   "hi": 0.6432967599575442,
+   "n": 111,
+   "movers": 30,
+   "families": 89
+  },
+  "model_vs_ss_only": {
+   "d_auc": 0.0016460905349794386,
+   "lo": -0.0993613591269841,
+   "hi": 0.11726542207792204,
+   "p_two_sided": 0.983
+  },
+  "burial_only": {
+   "auc": 0.44897119341563785,
+   "lo": 0.32853430022506513,
+   "hi": 0.5745491489110779,
+   "n": 111,
+   "movers": 30,
+   "families": 89
+  },
+  "model_vs_burial_only": {
+   "d_auc": 0.08312757201646093,
+   "lo": -0.03792424891600542,
+   "hi": 0.20420931058990754,
+   "p_two_sided": 0.18
+  },
+  "within_protein": {
+   "auc": 0.375,
+   "lo": 0.0,
+   "hi": 0.8333333333333334
+  },
+  "within_protein_ss_only": {
+   "auc": 0.4375,
+   "lo": 0.25,
+   "hi": 0.8363636363636353
+  },
+  "within_protein_burial_only": {
+   "auc": 0.25,
+   "lo": 0.0,
+   "hi": 0.8888888888888888
+  }
+ },
+ "t4l": {
+  "trained_without_t4l": {
+   "auc": 0.5378600823045268,
+   "lo": 0.416162699650972,
+   "hi": 0.6639601692949906,
+   "n": 111,
+   "movers": 30,
+   "families": 89
+  },
+  "with_vs_without": {
+   "d_auc": -0.0057613168724279795,
+   "lo": -0.022333385579937286,
+   "hi": 0.013468883393256966,
+   "p_two_sided": 0.526
+  }
+ },
+ "positive_control_helix": {
+  "auc": 0.9506128334534968,
+  "lo": 0.9017393762288007,
+  "hi": 0.9871236240975264,
+  "n": 111,
+  "movers": 38,
+  "families": 89
+ },
+ "negative_control_shuffled_within_family": {
+  "reps": 1000,
+  "mean_auc": 0.5382423868312757,
+  "sd": 0.018151189796711896,
+  "q025": 0.49876543209876545,
+  "q975": 0.5732510288065844
+ },
+ "power": {
+  "families": 89,
+  "n_eff_families": 72.90532544378698,
+  "se_auc": 0.06614046480089661,
+  "se_auc_iid": 0.061974816780301895,
+  "design_effect": 1.1389482251047611,
+  "min_detectable_auc": 0.6852991261861919,
+  "se_d_auc_vs_ss": 0.057091278673706045,
+  "min_detectable_d_auc": 0.15994692633225485
+ },
+ "artifact_diagnostics": {
+  "temperature_mismatch_gt50K": {
+   "n_suspect": 5,
+   "mover_rate_suspect": 0.6,
+   "mover_rate_rest": 0.25471698113207547,
+   "excluded": {
+    "name": "excluding temperature_mismatch_gt50K",
+    "auc": 0.5339896858884201,
+    "lo": 0.40363795506305444,
+    "hi": 0.6720940170940172,
+    "n": 106,
+    "movers": 27,
+    "families": 84
+   }
+  },
+  "mutant_resolution_worse_gt0.5A": {
+   "n_suspect": 4,
+   "mover_rate_suspect": 0.25,
+   "mover_rate_rest": 0.27102803738317754,
+   "excluded": {
+    "name": "excluding mutant_resolution_worse_gt0.5A",
+    "auc": 0.5167992926613616,
+    "lo": 0.39086363391510454,
+    "hi": 0.6500051440329218,
+    "n": 107,
+    "movers": 29,
+    "families": 86
+   }
+  },
+  "mutant_altloc_in_window": {
+   "n_suspect": 10,
+   "mover_rate_suspect": 0.3,
+   "mover_rate_rest": 0.26732673267326734,
+   "excluded": {
+    "name": "excluding mutant_altloc_in_window",
+    "auc": 0.5320320320320321,
+    "lo": 0.39869562069386016,
+    "hi": 0.672250087556912,
+    "n": 101,
+    "movers": 27,
+    "families": 82
+   }
+  },
+  "mutated_residue_in_lattice_contact": {
+   "n_suspect": 32,
+   "mover_rate_suspect": 0.375,
+   "mover_rate_rest": 0.22784810126582278,
+   "excluded": {
+    "name": "excluding mutated_residue_in_lattice_contact",
+    "auc": 0.5974499089253188,
+    "lo": 0.4368337510442774,
+    "hi": 0.7727624606722965,
+    "n": 79,
+    "movers": 18,
+    "families": 66
+   }
+  },
+  "any": {
+   "n_suspect": 46,
+   "mover_rate_suspect": 0.391304347826087,
+   "mover_rate_rest": 0.18461538461538463,
+   "excluded": {
+    "name": "excluding any",
+    "auc": 0.5833333333333334,
+    "lo": 0.38186383928571427,
+    "hi": 0.7906352201257858,
+    "n": 65,
+    "movers": 12,
+    "families": 54
+   }
+  },
+  "window_in_lattice_contact": {
+   "n_suspect": 56,
+   "mover_rate_suspect": 0.2857142857142857,
+   "mover_rate_rest": 0.2545454545454545,
+   "excluded": {
+    "name": "excluding window_in_lattice_contact",
+    "auc": 0.5034843205574913,
+    "lo": 0.33085575048732946,
+    "hi": 0.7055637254901961,
+    "n": 55,
+    "movers": 14,
+    "families": 47
+   }
+  }
+ },
+ "subsets": [
+  {
+   "name": "confident labels (|z|>3 or <1)",
+   "n": 37,
+   "movers": 4,
+   "note": "n too small (< 30 rows or < 10 per class): not reported"
+  },
+  {
+   "name": "helix",
+   "n": 38,
+   "movers": 9,
+   "note": "n too small (< 30 rows or < 10 per class): not reported"
+  },
+  {
+   "name": "strand",
+   "n": 24,
+   "movers": 7,
+   "note": "n too small (< 30 rows or < 10 per class): not reported"
+  },
+  {
+   "name": "loop",
+   "auc": 0.45102040816326533,
+   "lo": 0.26124330900823184,
+   "hi": 0.6810883677795443,
+   "n": 49,
+   "movers": 14,
+   "families": 38
+  }
+ ]
+}
