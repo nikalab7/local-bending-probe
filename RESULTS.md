@@ -422,6 +422,48 @@ Noise decomposition (site): the noise score reaches 0.556 on real labels; site f
 3. **"What" (the local sequence change) adds ≈ 0.01–0.02 AUC once "where" is known**, whether it is described physically or by an evolutionary language model. The original hypothesis, that local sequence drives which mutations bend the backbone, is rejected at this resolution.
 4. **Ceiling.** Labels support at most AUC ≈ 0.75. The final model reaches 0.64, about 55% of the achievable margin above chance. The learning curve is flat and every model variant is within ±0.02, so the remaining gap is label noise (85% single-crystal labels), not model capacity or data volume.
 
+## Final pre-registered evaluation (`PROTOCOL.md`, `final_eval.py`)
+
+Frozen in commit `fe9c3c7` before any final evaluation. Label: combined (max |z| over bend, phi, psi and CA torsion b; NCS averaged; threshold 2.61, rescaled to |z| > 2). Features: SITE + SUBST (WT structure + substitution only). Model: logistic regression, C = 0.3, balanced, confidence-weighted. 95% family-bootstrap CIs (2000 resamples) and paired family-bootstrap tests throughout.
+
+**Lockbox (one run, `results/final_lockbox.json`).** 90 proteins in 89 families with 1-3 single-substitution entities each, never loaded by the dev miner, none with >= 30% sequence identity to any dev protein. 111 labelled mutations, 30 movers (27%). WT-vs-WT null: 4.7% false positives (n = 214; dev 2.6%), with a median of 3 WT crystals per form (dev 7).
+
+| | lockbox | dev (exploratory, `results/final_dev.json`) |
+|---|---|---|
+| model AUC | **0.532 [0.403, 0.661]** | 0.662 [0.633, 0.698] |
+| SS-only | 0.530 [0.411, 0.643] | 0.576 [0.536, 0.621] |
+| burial-only (hse_up + n_ca10) | 0.449 [0.329, 0.575] | 0.550 [0.508, 0.583] |
+| model − SS-only | +0.002 [−0.099, +0.117], p = 0.98 | +0.087 [+0.052, +0.120], p < 0.001 |
+| model − burial-only | +0.083 [−0.038, +0.204], p = 0.18 | +0.112 [+0.076, +0.160], p < 0.001 |
+| within-protein AUC | 0.375 [0.00, 0.83] | 0.653 [0.635, 0.711] |
+| T4L | trained without T4L: 0.538; with − without −0.006 [−0.022, +0.013] | non-T4L rows 0.666; retrained without T4L 0.666; T4L rows 0.634 |
+| positive control (helix from non-SS features) | 0.951 [0.902, 0.987] | 0.915 [0.887, 0.935] |
+| negative control (labels shuffled within families) | 0.538 ± 0.018 (1000 shuffles of frozen scores) | 0.529 ± 0.016 (20 retrained) |
+| families / Kish n_eff | 89 / 72.9 | 250 / 30.4 |
+| SE of AUC (design effect) | 0.066 (1.1) | 0.016 (0.9) |
+| minimum detectable AUC / dAUC vs SS | 0.685 / 0.160 | 0.545 / 0.049 |
+| ceiling (split-half oracle, dev) | 0.787 | 0.787 |
+
+Artifact diagnostics (rows excluded; never model inputs):
+
+| excluded | lockbox: suspect n, AUC after | dev: suspect n, AUC after |
+|---|---|---|
+| temperature mismatch > 50 K | 5, 0.534 | 240, 0.665 [0.624, 0.707] |
+| mutant resolution worse by > 0.5 A | 4, 0.517 | 101, 0.663 [0.634, 0.702] |
+| mutant altlocs in window | 10, 0.532 | 99, 0.668 [0.639, 0.706] |
+| mutated residue in a lattice contact | 32, 0.597 [0.437, 0.773] | 326, 0.680 [0.645, 0.723] |
+| any of the four | 46, 0.583 [0.382, 0.791] | 631, 0.701 [0.646, 0.759] |
+| any window residue in a lattice contact | 56, 0.503 | 736, 0.683 [0.637, 0.731] |
+
+On dev, suspect rows have higher mover rates (room-temperature mutant vs cryo WT: 57% vs 34%; mutant > 0.5 A worse: 55% vs 34%), and excluding them raises AUC, so they add label noise rather than create the signal. The protocol's literal "holds" criterion (AUC after exclusion inside the headline CI) is missed on dev in the favourable direction (0.701 vs upper bound 0.698). Secondary dev subsets: confident labels 0.775 [0.723, 0.822], helix 0.634, strand 0.655, loop 0.620. On the lockbox only loops reach 30 rows (0.451 [0.26, 0.68]); the other subsets are below the reporting threshold.
+
+**Reading.**
+1. The pre-registered criterion (lockbox CI excludes 0.5 and the model beats both baselines) is **not met**.
+2. The lockbox is **underpowered**, not a clean negative. Its minimum detectable AUC (0.685) lies above the dev estimate, and its CI contains both 0.5 and 0.66. The size rule in PROTOCOL.md was met but was too weak; by the power analysis the lockbox is too small, so **all results are exploratory** (user rule 2).
+3. Lockbox labels are noisier (null FP 4.7% vs 2.6%; fewer WT crystals), which lowers the achievable AUC below the dev ceiling.
+4. The negative controls sit at 0.53-0.54, not 0.50. On dev, within-family shuffling keeps each family's mover rate, and the model partly ranks families: about 0.03 of the pooled dev AUC is between-protein. Within-protein AUC (0.653) is the cleaner dev estimate. On the lockbox the control is nearly degenerate (73 of 89 families have a single row, so shuffling within them changes nothing). It is therefore not evidence about the model, and the model AUC (0.532) is indistinguishable from it.
+5. Positive controls pass: the pipeline and splits can learn a real target (helix AUC 0.92-0.95).
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°

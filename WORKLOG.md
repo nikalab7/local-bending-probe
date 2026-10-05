@@ -1,6 +1,6 @@
 # Work log: what was done and what we found
 
-Short summary. Full tables: `RESULTS.md` (v2–v5) and `README.md`.
+Short summary. Full tables: `RESULTS.md` (v2–v5 and the final pre-registered evaluation), `README.md`, `PROTOCOL.md`.
 
 ## The question
 Does a single amino-acid substitution bend the protein backbone at that site, and can we predict which mutations will?
@@ -17,12 +17,15 @@ A mutation counts as a **mover** when its change clearly exceeds crystal-to-crys
 | v3 | systematic miner (RCSB + SIFTS), 191 proteins; WT-vs-WT null control | 0.60 (half the signal turned out to be noise structure) |
 | v4 | **fixed the noise floor**: small-n MAD bias, SD estimator, Student-t; additives; WT ligand rule; split-half ceiling; ESM-2 | 0.61 (ensemble 0.63) |
 | v5 | confidence-weighted training; 319 proteins; `predict.py` | 0.639; 0.714 on confident labels |
-| v6 (current) | NCS-copy averaging; label-metric comparison; **combined label** | **0.662**; 0.74 on confident labels |
+| v6 | NCS-copy averaging; label-metric comparison; **combined label** | 0.662; 0.74 on confident labels |
+| final (pre-registered) | `PROTOCOL.md` frozen (commit `fe9c3c7`); fresh lockbox of 90 unseen proteins scored once | **lockbox 0.532 [0.403, 0.661]** (not confirmed, underpowered); dev 0.662 [0.633, 0.698] |
 
 ## Main results
+**Status: all results are exploratory.** The pre-registered lockbox did not confirm the dev signal (AUC 0.532 [0.403, 0.661], n = 111, 89 families), and it was too small to detect it (minimum detectable AUC 0.685). See *Final result* below.
+
 1. **Bending is real.** 28–36% of clean single mutations move the backbone beyond noise, against 2.6% of WT-vs-WT pseudo-mutants.
 2. **"What" adds almost nothing:** +0.014 AUC, and +0.002 even with the ESM-2 language model. The original hypothesis, that local sequence determines bending, is rejected.
-3. **The information is in "where":** a straight WT window, burial and non-local contacts. That beats secondary structure by +0.09 and beats a noise-only score by +0.07.
+3. **On dev, the information is in "where":** a straight WT window, burial and non-local contacts. That beats secondary structure by +0.09 and burial alone by +0.11, and beats a noise-only score by +0.07. About 0.03 of the pooled dev AUC is between-protein (negative control 0.53); within-protein AUC is 0.65. **Not confirmed on the lockbox.**
 4. **The ceiling is set by label noise.** Split-half reliability puts the achievable AUC at about 0.72–0.79. The learning curve is saturated, and every model variant (boosting, ensemble, ESM) lands within ±0.02.
 
 ## v6: better labels (null false-positive rate ~2.6–3% for all)
@@ -120,8 +123,32 @@ Every decision that shaped the final pipeline: what was decided, why, on which d
 | E3 | No result from groups with < 30 rows or < 10 per class | user rule 6 | — | — |
 | E4 | Artifact "any" exclusion = temperature gap > 50 K, mutant resolution > 0.5 A worse, mutant altlocs, mutated residue in a lattice contact; window-in-contact reported separately | window contacts cover ~60% of dev rows and are unrelated to mover rate (36% vs 36%), so they would remove most data for nothing | dev (counts and mover rates only, no model scores) | window contact inside "any" |
 
-## Running / next
-- ESM-2 embedding test (running)
-- Artifacts: crystal contacts, data-collection temperature, resolution gap, altlocs (running)
-- Mechanical features (elastic network: how much the window bends when the site is pushed) (running)
-- Build the combined label into `pairs.py`, re-run the full pipeline, retrain the final model
+## Final result (pre-registered)
+Rules followed (user's protocol message): freeze before evaluation, a clean lockbox, WT-only inputs, family splits, controls and baselines, family bootstrap with paired tests and power, fixed reporting, and this decision log.
+
+| | lockbox (once) | dev (exploratory) |
+|---|---|---|
+| model AUC | **0.532 [0.403, 0.661]** | 0.662 [0.633, 0.698] |
+| model − SS-only | +0.002 [−0.099, +0.117] | +0.087 [+0.052, +0.120] |
+| model − burial-only | +0.083 [−0.038, +0.204] | +0.112 [+0.076, +0.160] |
+| within-protein | 0.375 [0.00, 0.83] | 0.653 [0.635, 0.711] |
+| positive / negative control | 0.951 / 0.538 | 0.915 / 0.529 |
+| minimum detectable AUC | 0.685 | 0.545 |
+| null false positives | 4.7% | 2.6% |
+| ceiling | 0.787 (dev) | 0.787 |
+
+- **Not confirmed:** the lockbox CI includes 0.5 and the model does not beat the baselines there.
+- **Underpowered, not refuted:** the lockbox could detect only AUC >= 0.685; its CI also contains 0.66. Its labels are noisier (median 3 WT crystals per form vs 7).
+- **Without T4L:** dev 0.666; lockbox model trained without T4L 0.538. T4L does not drive the result.
+- **Artifacts:** excluding temperature/resolution/altloc/lattice-suspect rows raises dev AUC to 0.70. These cases add noise; they are not the signal.
+
+Decisions recorded after the lockbox run (not changes to the frozen analysis):
+| # | what | why | data |
+|---|---|---|---|
+| P1 | All results labelled exploratory | the protocol's size rule (>= 30 rows, >= 10 per class, >= 10 families) was met, but the power analysis shows the lockbox cannot detect the dev effect, so user rule 2 ("too small -> exploratory") applies | lockbox power analysis |
+| P2 | The lockbox negative control is reported as degenerate | 73 of 89 lockbox families have one row, so shuffling within families leaves most labels unchanged | lockbox family sizes |
+| P3 | No re-analysis of the lockbox (no new features, thresholds or subsets) | one run only; anything further would be exploratory and would contaminate the next lockbox | — |
+
+## Next
+- A confirmatory test needs about 3–4x more independent families (300+), ideally with more WT crystals per form, e.g. PDB depositions after the freeze date. Re-run `mine_pairs.py --lockbox` against a new dev manifest that includes the current lockbox, then run `final_eval.py lockbox` once on the new set.
+- `predict.py` still ships the v5 (bend-label) fit; refit with the frozen label if the tool is used.

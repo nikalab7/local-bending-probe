@@ -12,9 +12,39 @@ To answer that, I built a lightweight, interpretable pipeline designed around a 
 
 The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
 
-On 1,250 clean WT/mutant pairs from 319 proteins, the identity of the substitution adds little or nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a modest, real signal: straight, buried windows with non-local contacts move more.
+On 1,250 clean WT/mutant pairs from 319 proteins, the identity of the substitution adds little or nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a modest signal on the development data: straight, buried windows with non-local contacts move more. **A pre-registered lockbox of 90 unseen proteins did not confirm that signal** (AUC 0.53 [0.40, 0.66]). It was too small to detect an effect of the size seen in development, so every result here is exploratory.
 
 The failure of the local model became the result.
+
+---
+
+## Final result (pre-registered, `PROTOCOL.md`)
+
+The label, features, model, metrics and analysis plan were frozen in `PROTOCOL.md` (commit `fe9c3c7`) before any final evaluation. The lockbox was then scored once (`results/final_lockbox.json`). It holds 90 proteins in 89 families that never entered any decision, none with >= 30% sequence identity to a development protein. All CIs below are 95% family-bootstrap intervals.
+
+| | **lockbox** (n = 111, 30 movers, 89 families) | dev (n = 1250, 447 movers, 250 families; exploratory) |
+|---|---|---|
+| **model AUC** (site + substitution, logistic regression) | **0.532 [0.403, 0.661]** | 0.662 [0.633, 0.698] |
+| label ceiling (split-half oracle, dev) | 0.787 | 0.787 |
+| SS-only baseline | 0.530; model − SS **+0.002 [−0.099, +0.117]**, p = 0.98 | 0.576; +0.087 [+0.052, +0.120], p < 0.001 |
+| burial-only baseline | 0.449; model − burial **+0.083 [−0.038, +0.204]**, p = 0.18 | 0.550; +0.112 [+0.076, +0.160], p < 0.001 |
+| within-protein AUC | 0.375 [0.00, 0.83] (almost no within-protein pairs) | 0.653 [0.635, 0.711] |
+| without T4L | 0.538 (trained without T4L) | 0.666 (retrained without T4L) |
+| positive control (predict helix) | 0.951 | 0.915 |
+| negative control (labels shuffled within families) | 0.538 ± 0.018 (degenerate: 73 of 89 families have one row) | 0.529 ± 0.016 |
+| minimum detectable AUC (alpha 0.05, power 0.8) | **0.685** (n_eff 72.9 families) | 0.545 (n_eff 30.4) |
+| WT-vs-WT null false-positive rate | 4.7% (median 3 WT crystals per form) | 2.6% (median 7) |
+| excluding artifact-suspect rows ("any") | 0.583 [0.382, 0.791] (46 excluded) | 0.701 [0.646, 0.759] (631 excluded) |
+
+**What this means.**
+1. **The pre-registered success criterion was not met.** The lockbox AUC CI includes 0.5, and the model does not beat either baseline on the lockbox.
+2. **The lockbox is inconclusive rather than negative.** It could only have detected an AUC of about 0.685 or more, which is above the dev estimate of 0.66, and its CI contains 0.66 as well as 0.5. The size rule in `PROTOCOL.md` (>= 30 rows, >= 10 per class, >= 10 families) was met, but it was too lax: the power analysis shows the lockbox is too small for this effect. **All results are therefore exploratory.**
+3. **The lockbox labels are noisier.** Lockbox proteins have few WT crystals (median 3 vs 7), so the WT-vs-WT null false-positive rate is 4.7% against 2.6% in dev. About 5 of the 30 lockbox "movers" are expected to be noise.
+4. **The dev number contains a between-protein component.** Shuffling labels within families still gives AUC 0.53 on dev, because the model partly learns which families have more movers. The within-protein AUC (0.653) is the cleaner dev estimate of the site-level signal.
+5. **Artifacts do not explain the dev signal.** Removing rows with temperature or resolution mismatches, mutant altlocs or lattice contacts at the mutated residue raises dev AUC (0.70). Those cases are noisier, not the source of the signal. They were never model inputs.
+6. **"What" vs "where" is unaffected.** The substitution adds about +0.01 on dev, and no added feature (ESM-2, elastic network, full-atom context) helped (`WORKLOG.md`, decision log).
+
+A confirmatory test needs a larger lockbox. The minimum detectable AUC scales as 0.5 + 2.8 x SE, with SE proportional to 1/sqrt(families). Detecting AUC 0.66 needs about 1.4x the current lockbox; detecting AUC 0.60 (plausible with noisier labels), or the +0.09 margin over SS-only, needs about 3–4x. That means 300+ independent families, ideally with more WT crystals per form, e.g. from future PDB depositions.
 
 ---
 
@@ -89,7 +119,7 @@ This time the null is informative. The first engine predicted absolute bending (
 
 ## The most informative result
 
-Where the mutation sits does carry information:
+Where the mutation sits carries information **on the development data** (v5 numbers below; the frozen v6 pipeline gives 0.662, see *Final result*). The pre-registered lockbox did not confirm it (AUC 0.53 [0.40, 0.66], underpowered), so treat this section as exploratory:
 
 * Site features: AUC **0.63 [0.59, 0.66]** with whole families held out, **0.68** on labels that are clearly mover or clearly not
 * Beyond secondary structure: **+0.086 [+0.05, +0.12]**
@@ -126,7 +156,7 @@ L99A            0.35     81%  H    109.8          1      31
 K16E            0.16     10%  E    101.9          5       4
 ```
 
-`P(mover)` is the calibrated probability that the mutation moves the 5-residue window around it beyond crystal noise (training base rate 27%). `pctile` ranks it among the 1,250 training mutations. Use it to rank candidate mutations by risk of local backbone change, not as a yes/no call.
+`P(mover)` is the calibrated probability that the mutation moves the 5-residue window around it beyond crystal noise (training base rate 27%). `pctile` ranks it among the 1,250 training mutations. Use it to rank candidate mutations by risk of local backbone change, not as a yes/no call. Caveats: the shipped model is the v5 fit (bend label), and the pre-registered lockbox did not confirm that this kind of model generalizes to unseen proteins (*Final result*).
 
 ---
 
@@ -146,7 +176,7 @@ The conclusion is simple:
 >
 > Local sequence does not predict it: once the site is known, the substitution adds about 0.01 AUC, whether it is described physically or by an evolutionary language model.
 >
-> The site's structural context carries a modest real signal, mostly through tertiary environment. At AUC ≈ 0.64 (0.71 on clear-cut labels), against a label-reliability ceiling near 0.75, it ranks mutations by risk but is not a yes/no predictor.
+> On the development data the site's structural context carries a modest signal, mostly through tertiary environment: AUC 0.66 (within-protein 0.65), against a label-reliability ceiling of 0.79. A pre-registered lockbox of 90 unseen proteins did not confirm it (AUC 0.53 [0.40, 0.66]); it was too small to detect an effect of this size, so the site signal remains an exploratory finding. At best it ranks mutations by risk; it is not a yes/no predictor.
 
 That result may be less exciting than discovering a new predictor, but it is arguably more informative.
 
