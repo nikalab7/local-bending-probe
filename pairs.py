@@ -124,8 +124,8 @@ def parse_structure(path):
     chains = {chain: {resSeq: (aa, ca_xyz, ca_bfactor)}} and hets is a list of
     (resname, xyz) for every non-water HETATM atom.
     """
-    out = dict(resolution=None, spacegroup=None, cell=None,
-               helix=set(), sheet=set(), hets=[])
+    out = dict(resolution=None, spacegroup=None, cell=None, temperature=None,
+               helix=set(), sheet=set(), hets=[], altloc=set())
     best, bb_best = {}, {}
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt") as fh:
@@ -140,6 +140,12 @@ def parse_structure(path):
                                          (33, 40), (40, 47), (47, 54)))
                     out["spacegroup"] = line[55:66].strip() or None
                 except ValueError:
+                    pass
+            elif rec == "REMARK" and line[6:10].strip() == "200" and "TEMPERATURE" in line \
+                    and "KELVIN" in line and out["temperature"] is None:
+                try:
+                    out["temperature"] = float(line.split(":", 1)[1].split(";")[0].split()[0])
+                except (ValueError, IndexError):
                     pass
             elif rec == "REMARK" and line[6:10].strip() == "2" \
                     and "RESOLUTION." in line:
@@ -187,6 +193,11 @@ def parse_structure(path):
                     continue
                 if name != "CA":
                     continue
+                if line[16] not in (" ", "A"):          # a B/C/... conformer exists
+                    try:
+                        out["altloc"].add((line[21], int(line[22:26])))
+                    except ValueError:
+                        pass
                 aa = THREE2ONE.get(line[17:20].strip())
                 if aa is None or line[26] != " ":
                     continue
@@ -674,7 +685,18 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
         clean_wt = [p for p in cands if near_hets(structs[p], structs[p]["res"], s) == typical]
         scaffold = min(clean_wt or cands,
                        key=lambda p: (structs[p]["resolution"], -len(structs[p]["res"])))
+        def _med(vals):
+            vals = [v for v in vals if v is not None]
+            return float(np.median(vals)) if vals else float("nan")
+
+        def _alt(pids):
+            return float(np.mean([any((structs[p]["chid"], w) in structs[p]["altloc"]
+                                      for w in range(s, s + 5)) for p in pids])) if pids else float("nan")
         cand[mut].append(dict(
+            temp_wt=_med([structs[p]["temperature"] for p in W["wts"]]),
+            temp_mut=_med([structs[p]["temperature"] for p in used]),
+            res_wt=_med([structs[p]["resolution"] for p in W["wts"]]),
+            altloc_wt=_alt(W["wts"]), altloc_mut=_alt(used),
             protein=protein, family=family or protein, r=r, wt=wtaa, mut=mutaa, form=f, s=s,
             n_wt=n, n_mut=m,
             wt_bend=wt_med if METRIC == "bend" else wt_window_bend(structs, W["wts"], s),

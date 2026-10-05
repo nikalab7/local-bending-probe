@@ -60,6 +60,7 @@ VOL = dict(A=88.6, R=173.4, N=114.1, D=111.1, C=108.5, Q=143.8, E=138.4,
 CONTEXT = ["phi_pos", "phi_alpha", "phi_beta", "bb_hbonds", "sc_contacts",
            "cb_density", "sc_bb_hbonds", "log_lig_dist", "ss_end_dist",
            "helix_nterm", "helix_cterm"]
+LATTICE = ["lattice_site", "lattice_window"]   # crystal-packing contacts (gemmi)
 INTERACT = ["gly_phi_pos_loss", "pro_phi_strain", "pro_in_helix", "overpack",
             "cavity_cb", "sc_hb_loss", "helix_prop_change", "sheet_prop_change",
             "buried_charge_in"]
@@ -231,6 +232,45 @@ def ss_span_of(helix, sheet, chain, r):
 
 
 _CACHE = {}
+_LATTICE = {}
+
+
+def lattice_contacts(path, chain, r, s, cutoff=4.0):
+    """Crystal-packing contacts of the WT scaffold (needs gemmi; NaN without it).
+
+    Returns (atoms of residue r, atoms of window s..s+4) within `cutoff` of an
+    atom of a symmetry mate (another copy in the lattice, image_idx != 0) or of
+    another chain of the asymmetric unit. These are packing contacts, not
+    contacts inside the molecule.
+    """
+    try:
+        import gemmi
+    except ImportError:
+        return np.nan, np.nan
+    if path not in _LATTICE:
+        st = gemmi.read_structure(path)
+        st.remove_hydrogens()
+        model = st[0]
+        ns = gemmi.NeighborSearch(model, st.cell, 6).populate()
+        _LATTICE[path] = (model, ns)
+    model, ns = _LATTICE[path]
+    try:
+        ch = model[chain]
+    except Exception:
+        return np.nan, np.nan
+    site = win = 0
+    for res in ch:
+        if res.het_flag == "H" or not s <= res.seqid.num <= s + 4 or res.seqid.icode != " ":
+            continue
+        for atom in res:
+            for m in ns.find_atoms(atom.pos, "\0", radius=cutoff):
+                cra = m.to_cra(model)
+                if m.image_idx != 0 or cra.chain.name != chain:
+                    if cra.residue.het_flag != "H":          # protein neighbour, not water/ligand
+                        win += 1
+                        site += res.seqid.num == r
+                        break
+    return float(site), float(win)
 
 
 def row_features(x):
@@ -246,4 +286,6 @@ def row_features(x):
     ctx = context_features(residues, het, x["r"], x["scaffold_ss"], span)
     out = {k: ctx[k] for k in CONTEXT}
     out.update(interaction_features(ctx, x["wt"], x["mut"], x["scaffold_ss"]))
+    out["lattice_site"], out["lattice_window"] = lattice_contacts(
+        x["scaffold_path"], x["scaffold_chain"], x["r"], x["s"])
     return out
