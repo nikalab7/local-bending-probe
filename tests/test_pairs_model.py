@@ -20,6 +20,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pairs                                   # noqa: E402
 import delta_model                             # noqa: E402
 
+# The synthetic structures carry C-alphas only, so the label-cleaning tests run on
+# the canonical single "bend" metric; the frozen combined label is unit-tested below.
+pairs.METRIC = "bend"
+pairs.NCS_AVERAGE = False
+
 AA3 = {v: k for k, v in pairs.THREE2ONE.items()}
 N_RES = 60
 SEQ = "".join(np.random.default_rng(7).choice(list("AVLIFMSTNQDEKRG"), N_RES))
@@ -547,3 +552,94 @@ def test_lattice_contacts_runs():
     write_pdb(p, SEQ, ideal_helix(), "A", 1.8)
     site, win = sf.lattice_contacts(p, "A", 30, 28)
     assert (np.isnan(site) and np.isnan(win)) or (0 <= site <= win)
+
+
+def test_multi_label_combination(monkeypatch):
+    """Combined label = largest |z| over MULTI_METRICS, rescaled so |z| > Z_MOVER
+    exactly when max |z_m| > MULTI_T; only mutations labelled by every metric."""
+    fake = {"bend": {(10, "A"): 1.0, (12, "G"): -2.0, (14, "W"): 0.5},
+            "phi": {(10, "A"): -3.0, (12, "G"): 1.0, (14, "W"): 0.2},
+            "psi": {(10, "A"): 0.1, (12, "G"): 2.5, (14, "W"): 2.0},
+            "ca_tor_b": {(10, "A"): 0.3, (12, "G"): 0.4}}
+
+    def single(paths, pick, protein, null_out=None, **kw):
+        rows = [dict(r=r, mut=m, z=z, protein=protein) for (r, m), z in fake[pairs.METRIC].items()]
+        return rows, dict(mutations=len(rows))
+    monkeypatch.setattr(pairs, "build_pairs_single", single)
+    monkeypatch.setattr(pairs, "METRIC", "multi")
+    rows, diag = pairs.build_pairs({}, None, "P")
+    by = {(x["r"], x["mut"]): x for x in rows}
+    assert set(by) == {(10, "A"), (12, "G")}                    # (14, W) lacks ca_tor_b
+    s = pairs.Z_MOVER / pairs.MULTI_T
+    assert abs(by[(10, "A")]["z"] - (-3.0 * s)) < 1e-12 and by[(10, "A")]["z_metric"] == "phi"
+    assert by[(10, "A")]["mover"] == (3.0 > pairs.MULTI_T)
+    assert by[(12, "G")]["mover"] is False and abs(by[(12, "G")]["z"] - 2.5 * s) < 1e-12
+    assert pairs.METRIC == "multi"
+
+
+# ------------------------- protocol guarantees --------------------------------
+def test_features_are_wt_only():
+    """Rule: no model input may come from the mutant side. Perturb every mutant
+    crystal (coordinates, resolution, temperature, altlocs) and require identical
+    features for every mutation; only the label may change."""
+    d1 = tempfile.mkdtemp(); paths = make_dataset(d1)
+    rows_a, _ = pairs.build_pairs(paths, lambda c: ("A", c["A"]), "synthetic", min_cons=5)
+    rng = np.random.default_rng(9)
+    for pid, p in paths.items():
+        st = pairs.parse_structure(p)
+        seq = "".join(v[0] for _, v in sorted(st["chains"]["A"].items()))
+        if seq == SEQ:
+            continue                                      # WT crystal: untouched
+        out = []
+        for line in open(p).read().splitlines():
+            if line.startswith("ATOM"):
+                xyz = np.array([float(line[30:38]), float(line[38:46]), float(line[46:54])])
+                xyz += rng.normal(0, 0.4, 3)
+                line = line[:30] + "".join(f"{v:8.3f}" for v in xyz) + line[54:]
+                out.append(line)
+                out.append(line[:16] + "B" + line[17:])   # an alternate conformer
+                continue
+            if line.startswith("REMARK   2 RESOLUTION"):
+                line = "REMARK   2 RESOLUTION.    2.40 ANGSTROMS."
+                out.append(line)
+                out.append("REMARK 200  TEMPERATURE           (KELVIN) : 293")
+                continue
+            out.append(line)
+        open(p, "w").write("\n".join(out) + "\n")
+    rows_b, _ = pairs.build_pairs(paths, lambda c: ("A", c["A"]), "synthetic", min_cons=5)
+    A = {(x["r"], x["mut"]): x for x in rows_a}; B = {(x["r"], x["mut"]): x for x in rows_b}
+    common = sorted(set(A) & set(B))
+    assert len(common) >= 4
+    cols = sorted({c for v in delta_model.FEATURE_SETS.values() for c in v})
+    FA = delta_model.featurize([A[k] for k in common]); FB = delta_model.featurize([B[k] for k in common])
+    for fa, fb in zip(FA, FB):
+        for c in cols:
+            va, vb = fa.get(c, np.nan), fb.get(c, np.nan)
+            assert (np.isnan(va) and np.isnan(vb)) or va == vb, c
+    assert any(A[k]["z"] != B[k]["z"] for k in common)    # the label did see the change
+
+
+def test_no_family_crosses_folds():
+    rng = np.random.default_rng(1)
+    fam = np.array([f"F{rng.integers(0, 40)}" for _ in range(500)])
+    for k in (5, 10):
+        folds = delta_model.site_folds(fam, k, 0)
+        for f in np.unique(fam):
+            assert len(set(folds[fam == f])) == 1
+
+
+def test_lockbox_disjoint_from_dev():
+    import json
+    import mine_pairs
+    if not (os.path.exists(mine_pairs.MANIFEST) and os.path.exists(mine_pairs.LOCKBOX_MANIFEST)):
+        import pytest
+        pytest.skip("manifests not present")
+    dev = json.load(open(mine_pairs.MANIFEST)); lb = json.load(open(mine_pairs.LOCKBOX_MANIFEST))
+    dev_acc = set(dev["proteins"]) | set(dev["covered"])
+    assert not dev_acc & set(lb["proteins"])
+    dev_fam = {v["family"] for v in dev["proteins"].values()} | {v["family"] for v in dev["covered"].values()}
+    assert not dev_fam & {v["family"] for v in lb["proteins"].values()}
+    dev_seq = {v["reference"] for v in dev["proteins"].values()}
+    assert not dev_seq & {v["reference"] for v in lb["proteins"].values()}
+    dev_pdb = {p for v in dev["proteins"].values() for p in v["entries"]}
+    assert not dev_pdb & {p for v in lb["proteins"].values() for p in v["entries"]}

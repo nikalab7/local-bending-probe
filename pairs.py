@@ -359,12 +359,18 @@ METRICS = {
     "phi":      (lambda st, s: _phi_psi(st, s, "phi"), True),
     "psi":      (lambda st, s: _phi_psi(st, s, "psi"), True),
 }
-METRIC = "bend"
+METRIC = "multi"
+# The frozen label (PROTOCOL.md): a mutation moves if the largest |z| over these
+# four window metrics exceeds MULTI_T. MULTI_T = 2.61 was set on the dev WT-vs-WT
+# null so the combined label has the same 2.6% false-positive rate as the bend
+# label alone; row z is rescaled so |z| > Z_MOVER <=> max |z_m| > MULTI_T.
+MULTI_METRICS = ("bend", "phi", "psi", "ca_tor_b")
+MULTI_T = 2.61
 # Average the metric over NCS copies (chains of the same crystal with the same
 # sequence): copies differ by coordinate error and local packing, so their mean
 # is a less noisy per-crystal value. Circular metrics average on the main chain's
 # frame.
-NCS_AVERAGE = False
+NCS_AVERAGE = True
 NCS_MIN_COVER = 0.8
 
 
@@ -575,8 +581,8 @@ def label(W, s, bends):
 
 
 # ------------------------------ pair builder --------------------------------
-def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
-                family=None, null_out=None):
+def build_pairs_single(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
+                       family=None, null_out=None):
     """Clean one-row-per-mutation labels for one protein.
 
     pdb_paths  : {pid: path}
@@ -723,6 +729,47 @@ def build_pairs(pdb_paths, pick_chain, protein, min_cons=5, prior=PRIOR,
     return rows, dict(diag)
 
 
+def build_pairs(pdb_paths, pick_chain, protein, null_out=None, **kw):
+    """Clean labels for the current METRIC (see build_pairs_single for the rules);
+    METRIC = "multi" (default) combines MULTI_METRICS with the frozen MULTI_T."""
+    global METRIC
+    if METRIC != "multi":
+        return build_pairs_single(pdb_paths, pick_chain, protein, null_out=null_out, **kw)
+    per, nulls, diag0 = {}, {}, None
+    try:
+        for m in MULTI_METRICS:
+            METRIC = m
+            nl = [] if null_out is not None else None
+            rows, diag = build_pairs_single(pdb_paths, pick_chain, protein, null_out=nl, **kw)
+            per[m] = {(x["r"], x["mut"]): x for x in rows}
+            if nl is not None:
+                nulls[m] = {(x["form"], x["s"], x["heldout"]): x for x in nl}
+            if m == MULTI_METRICS[0]:
+                diag0 = diag
+    finally:
+        METRIC = "multi"
+    scale = Z_MOVER / MULTI_T
+
+    def combine(parts):
+        zs = {m: p["z"] for m, p in parts.items()}
+        top = max(zs, key=lambda m: abs(zs[m]))
+        x = dict(parts[MULTI_METRICS[0]])
+        x.update({f"z_{m}": float(v) for m, v in zs.items()},
+                 z=float(np.sign(zs[top]) * abs(zs[top]) * scale), z_metric=top)
+        x["mover"] = bool(abs(x["z"]) > Z_MOVER)
+        return x
+    keys = set.intersection(*[set(v) for v in per.values()])
+    out = [combine({m: per[m][k] for m in MULTI_METRICS}) for k in sorted(keys)]
+    diag = dict(diag0 or {})
+    diag.update(mutations=len(out), movers=sum(x["mover"] for x in out))
+    if null_out is not None:
+        nk = set.intersection(*[set(v) for v in nulls.values()])
+        nr = [combine({m: nulls[m][k] for m in MULTI_METRICS}) for k in sorted(nk)]
+        diag.update(null_pseudo_pairs=len(nr), null_pseudo_movers=sum(x["mover"] for x in nr))
+        null_out.extend(nr)
+    return out, diag
+
+
 def null_rows(rows, structs, wt_by_form, cons, prior):
     """WT-vs-WT pseudo-mutants at the windows of the real rows.
 
@@ -803,6 +850,23 @@ def load_proteins(prior=PRIOR, null_out=None, mined=True):
                                     prior=prior, family=fam.get(name), null_out=null_out)
     for acc, v in sorted((man or {}).get("proteins", {}).items()):
         paths = {p: os.path.join(MINED_DIR, f"{p}.pdb.gz") for p in v["entries"]}
+        paths = {p: f for p, f in paths.items() if os.path.exists(f)}
+        if paths:
+            out[acc] = build_pairs(paths, {p: e["chain"] for p, e in v["entries"].items()},
+                                   acc, min_cons=3, prior=prior, family=v["family"],
+                                   null_out=null_out)
+    return out
+
+
+def load_lockbox(prior=PRIOR, null_out=None):
+    """Clean pairs for the held-out lockbox proteins (manifests/lockbox.json)."""
+    from mine_pairs import LOCKBOX_MANIFEST, LOCKBOX_DIR
+    import json
+    with open(LOCKBOX_MANIFEST) as fh:
+        man = json.load(fh)
+    out = {}
+    for acc, v in sorted(man["proteins"].items()):
+        paths = {p: os.path.join(LOCKBOX_DIR, f"{p}.pdb.gz") for p in v["entries"]}
         paths = {p: f for p, f in paths.items() if os.path.exists(f)}
         if paths:
             out[acc] = build_pairs(paths, {p: e["chain"] for p, e in v["entries"].items()},

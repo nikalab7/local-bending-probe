@@ -87,7 +87,7 @@ def _post(url, payload, tries=4):
             time.sleep(2 ** (k + 1))
 
 
-def candidate_accessions(min_single):
+def candidate_accessions(min_single, max_intervals=2000):
     """[(accession, n_single_entities)] from a search facet."""
     q = {"query": {"type": "group", "logical_operator": "and", "nodes": _XRAY + [
             {"type": "terminal", "service": "text", "parameters": {
@@ -102,7 +102,7 @@ def candidate_accessions(min_single):
                              "results_content_type": ["experimental"],
                              "facets": [{"name": "acc", "aggregation_type": "terms",
                                          "attribute": ACC_ATTR,
-                                         "max_num_intervals": 2000,
+                                         "max_num_intervals": max_intervals,
                                          "min_interval_population": min_single}]}}
     res = _post(SEARCH, q)
     return [(b["label"], b["population"]) for b in res["facets"][0]["buckets"]]
@@ -254,8 +254,8 @@ def families(ref_seqs, workers):
 
 
 # ------------------------------ download ------------------------------------
-def fetch_gz(pdb):
-    path = os.path.join(MINED_DIR, f"{pdb}.pdb.gz")
+def fetch_gz(pdb, dest=None):
+    path = os.path.join(dest or MINED_DIR, f"{pdb}.pdb.gz")
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return pdb
     for k in range(3):
@@ -273,6 +273,74 @@ def fetch_gz(pdb):
             pass
         time.sleep(2 ** (k + 1))
     return None
+
+
+# ------------------------------- lockbox ------------------------------------
+LOCKBOX_MANIFEST = os.path.join("manifests", "lockbox.json")
+LOCKBOX_DIR = "lockbox_pdb"
+LOCKBOX_MAX_SINGLE = 3     # dev uses accessions with >= 4 single-substitution entities
+
+
+def build_lockbox(workers, dev_manifest_path=None):
+    """Held-out proteins never used in any decision (see PROTOCOL.md).
+
+    Candidates: accessions with 1..LOCKBOX_MAX_SINGLE single-substitution
+    entities (the dev miner never saw them), same pre-screen as dev. Any
+    candidate with a >= 30%-identity sequence-search hit to a dev protein
+    (hit annotated with a dev accession, or a hit whose sequence is a dev
+    reference construct) is excluded, so no lockbox family overlaps dev.
+    """
+    with open(dev_manifest_path or MANIFEST) as fh:
+        dev = json.load(fh)
+    dev_acc = set(dev["proteins"]) | set(dev["covered"])
+    dev_seq = {v["reference"] for v in dev["proteins"].values()} | \
+              {v["reference"] for v in dev["covered"].values() if v.get("reference")}
+    cands = [a for a, n in candidate_accessions(1, 20000) if n <= LOCKBOX_MAX_SINGLE and a not in dev_acc]
+    print(f"lockbox candidates (1..{LOCKBOX_MAX_SINGLE} single-substitution entities, not dev): {len(cands)}")
+
+    def screen(acc):
+        try:
+            recs = [r for r in map(_flatten, entity_meta(entity_ids(acc))) if r]
+        except Exception:
+            return acc, None
+        return acc, prescreen([r for r in recs if r["resolution"] <= 2.5])
+
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        passed = {a: p for a, p in ex.map(screen, cands) if p is not None}
+    passed = {a: p for a, p in passed.items() if p["reference"] not in dev_seq}
+    print(f"pass pre-screen: {len(passed)}")
+
+    def homolog_of_dev(acc):
+        try:
+            ids = family_hits(passed[acc]["reference"])
+            for m in entity_meta(ids):
+                accs = {r["database_accession"] for r in
+                        (m["rcsb_polymer_entity_container_identifiers"]["reference_sequence_identifiers"] or [])
+                        if r["database_name"] == "UniProt"}
+                seq = (m.get("entity_poly") or {}).get("pdbx_seq_one_letter_code_can")
+                if accs & dev_acc or seq in dev_seq:
+                    return acc, True
+            return acc, False
+        except Exception:
+            return acc, True                  # cannot verify -> exclude
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        homolog = dict(ex.map(homolog_of_dev, sorted(passed)))
+    keep = {a: p for a, p in passed.items() if not homolog[a]}
+    print(f"excluded as >= 30% identical to dev: {sum(homolog.values())}; lockbox proteins: {len(keep)}")
+    fam = families({a: p["reference"] for a, p in keep.items()}, workers)
+    out = dict(max_single=LOCKBOX_MAX_SINGLE, family_identity=FAMILY_IDENTITY,
+               dev_manifest=dev_manifest_path or MANIFEST, proteins={})
+    for acc, p in sorted(keep.items()):
+        entries = {}
+        for f, v in p["forms"].items():
+            for kind in ("wt", "single"):
+                for r in v[kind]:
+                    entries[r["pdb"]] = dict(chain=r["chain"], form=f, kind=kind, resolution=r["resolution"])
+        desc = Counter(r["description"] for v in p["forms"].values() for r in v["wt"])
+        out["proteins"][acc] = dict(family="L" + fam[acc], description=desc.most_common(1)[0][0],
+                                    reference=p["reference"], n_single=p["n_single"],
+                                    forms=sorted(p["forms"]), entries=entries)
+    return out
 
 
 # -------------------------------- main --------------------------------------
@@ -343,7 +411,26 @@ def main():
     ap.add_argument("--manifest", default=None,
                     help="manifest path (default: %s); a new path with a new "
                          "--min-single builds a new pinned set" % MANIFEST)
+    ap.add_argument("--lockbox", action="store_true",
+                    help="build/download the held-out lockbox (manifests/lockbox.json)")
     args = ap.parse_args()
+    if args.lockbox:
+        if os.path.exists(LOCKBOX_MANIFEST):
+            with open(LOCKBOX_MANIFEST) as fh:
+                lb = json.load(fh)
+            print(f"[lockbox] {len(lb['proteins'])} pinned proteins")
+        else:
+            lb = build_lockbox(args.workers)
+            with open(LOCKBOX_MANIFEST, "w") as fh:
+                json.dump(lb, fh, indent=1, sort_keys=True)
+            print(f"[lockbox] pinned {len(lb['proteins'])} proteins -> {LOCKBOX_MANIFEST}")
+        os.makedirs(LOCKBOX_DIR, exist_ok=True)
+        pdbs = sorted({p for v in lb["proteins"].values() for p in v["entries"]})
+        with cf.ThreadPoolExecutor(max_workers=args.workers) as ex:
+            got = [p for p in ex.map(lambda p: fetch_gz(p, LOCKBOX_DIR), pdbs) if p]
+        print(f"[lockbox] downloaded/cached {len(got)}/{len(pdbs)} entries, "
+              f"{len({v['family'] for v in lb['proteins'].values()})} families -> {LOCKBOX_DIR}/")
+        return
     if args.manifest:
         MANIFEST = args.manifest
     man = load_manifest()
