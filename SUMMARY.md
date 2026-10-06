@@ -97,11 +97,11 @@ c. **Negative controls must match the data's structure.**
    - Shuffling labels within families is degenerate when most families have one row (73 of 89 in the lockbox).
    - On dev the same control gave 0.53, not 0.50, because the model partly ranks families by base rate. Within-protein AUC is the cleaner estimate of the site-level signal.
 
+d. **The label definition decides the "what vs where" answer.** Bend-only and dihedral-including labels support different conclusions about substitution identity. Pre-specify the label and report the component labels.
+
 e. **Choosing null held-out crystals by resolution biases the null low.** The best-resolution held-outs gave 2.6% WT–WT false positives; holding out all WT crystals gives 5.3% (`LABTEST.md`). Mutant crystals are not selected by resolution, so the null should not be either.
 
 f. **The mutant excess is not mainly experimental** (`LABTEST.md`, exploratory). WT–WT pairs move at 4–9% whatever their laboratory, refinement program or deposition gap. Mutant–WT pairs from the same lab, under matched conditions, move at 26 points more (+0.259 [+0.207, +0.317]). Uniform PDB-REDO re-refinement did not reduce it (+0.034 [−0.052, +0.118], n = 59).
-
-d. **The label definition decides the "what vs where" answer.** Bend-only and dihedral-including labels support different conclusions about substitution identity. Pre-specify the label and report the component labels.
 
 ## 5. Limitations
 
