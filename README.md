@@ -1,163 +1,144 @@
 # local-bending-probe
 
-## How much information about protein backbone bending is contained in local sequence?
+## Can local sequence tell which mutations change local backbone geometry?
 
-Modern protein-structure models rely heavily on long-range interactions and evolutionary information. This project asks a simpler question:
-
-**If we deliberately remove all non-local information, how much can local amino-acid sequence alone tell us about mutation-induced backbone bending?**
-
-To answer that, I built a lightweight, interpretable pipeline designed around a single idea:
-
-> Hold local geometry constant, then test whether local sequence patterns can explain which mutations bend the backbone.
-
-The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
-
-Local sequence contains enough information to explain some aspects of absolute backbone geometry, but it contains remarkably little information about which mutations will change that geometry.
-
-The failure of the local model became the result.
+> **Status.** This is the first version of the project (T4 lysozyme plus four validation
+> proteins). It is kept as a record. An earlier version of this README concluded that
+> information about mutation-induced bending is absent from local sequence. **The data
+> here do not support that conclusion**, and it is withdrawn. The section
+> [What can be claimed](#what-can-be-claimed) states what does hold. A rebuilt pipeline
+> is in progress on branch `v2-benchmark-rebuild`. It uses per-mutation labels, a
+> calibrated noise floor and a replacement metric.
 
 ---
 
 ## The question
 
-Protein structure is often discussed as a sequence-to-structure problem, but that framing hides an important distinction.
+A protein backbone can change shape for many reasons: local residue preferences,
+secondary-structure tendencies, packing, long-range contacts and solvent effects. This
+project tried to isolate the first one:
 
-A protein's backbone can bend for many reasons:
+**If all non-local information is removed, can local amino-acid sequence predict which
+single mutations change the backbone around them?**
 
-* local amino-acid preferences,
-* secondary-structure tendencies,
-* packing interactions,
-* long-range contacts,
-* solvent effects,
-* global folding constraints.
-
-The goal of this project was to isolate the first factor.
-
-Given two protein segments with similar local geometry, can local sequence alone predict which one bends more?
-
-If the answer were yes, it would suggest that interpretable local rules explain a meaningful fraction of backbone deformation.
-
-If the answer were no, it would imply that the information lives elsewhere.
+The design was a chain of falsification tests ("gates"), each with a failure condition
+fixed before it ran. `RESULTS.md` is the gate-by-gate log with the original numbers.
 
 ---
 
-## Approach
+## What was done
 
-The project was designed as a sequence of falsification tests rather than a search for positive results.
-
-The workflow was:
-
-1. Build a robust bending metric.
-2. Verify that mutation-induced bending exists in real structures.
-3. Train a local-sequence model.
-4. Test whether prediction survives strict validation.
-5. Add structural context and measure what changes.
-
-Every stage had a predefined failure condition.
-
-The objective was not to maximize performance but to determine where the predictive information actually resides.
-
----
-
-## What worked
-
-The phenomenon itself is real.
-
-Across experimental structures, approximately 29% of mutations produced backbone changes larger than the measured structural noise floor.
-
-Mutations do move protein backbones.
-
-The project also confirmed a well-known structural principle:
-
-> Backbone changes are more common in flexible regions.
-
-Mutations were significantly enriched in loops compared with more rigid secondary structures.
-
-These findings survived statistical testing and replication.
+1. **Metric** (`bending_metric.py`). The angle between principal axes of the two halves of
+   a 5-residue Cα window.
+2. **Signal** (`feasibility_t4l.py`). WT/mutant crystal pairs of T4 lysozyme. A pair is
+   called a *mover* when |Δangle| exceeds 2σ of a per-window floor estimated from WT
+   crystals.
+3. **Model** (`gate2_model_feasibility.py`). Gradient boosting (HistGradientBoosting),
+   trained to predict the **absolute** angle from local sequence on 136,961 windows from
+   568 chains culled at ≤ 30% identity. Mutation effects were scored as
+   prediction(mutant) − prediction(WT).
+4. **Loops and replication** (`loop_gate.py`, `powered_loop_gate.py`). Loop-only retrieval on
+   T4L, then on barnase, human lysozyme and RNase A.
+5. **3D context** (`gate3_3d.py`). Contact-residue composition added to the features.
 
 ---
 
-## What failed
+## What the data show
 
-The central hypothesis did not survive.
+**The model over-responds.** On the 248 T4L pairs, predicting Δ = 0 for every pair gives
+an RMSE of 3.02°. The model's predicted Δ has an RMSE of 7.58° against the observed Δ,
+2.5× worse than predicting zero. Its predictions do not track the observed changes
+(Spearman 0.08) and are roughly twice their typical size. Mover retrieval is
+AUC 0.52. The likely reason: the model learned average residue-to-local-geometry
+propensities across proteins, and inside a fixed folded context most of those effects
+do not happen.
 
-Models using only local sequence information performed only slightly above chance:
+> `RESULTS.md` (Gate 2) describes this the other way round: a "5.7× error cancellation"
+> and a model that "barely responds". Both readings are wrong. The √2×RMSE bound assumes
+> independent errors, which two near-identical inputs do not have. Against the
+> predict-zero baseline the model is too sensitive, not insensitive.
 
-* Overall AUC ≈ 0.52
-* Loop-focused replication AUC ≈ 0.59
+**The model is weak on absolute geometry, too.** Held-out RMSE is 30.55° against a standard
+deviation of 37.97°, so R² ≈ 0.35. (`RESULTS.md` calls the 20% RMSE reduction a
+"variance reduction".)
 
-More importantly, every confidence interval included chance performance.
+**The metric measures local Cα conformation, not bending.** An ideal, perfectly straight
+α-helix reads about 110° and a straight β-strand about 0°. The angle is mostly a
+secondary-structure readout, and a "mover" is a pair whose local Cα geometry changed,
+not one whose backbone axis bent. The median |Δ| of movers (2.66°) corresponds to Cα
+shifts of roughly 0.1–0.2 Å, close to the coordinate error of 1.5–2 Å structures.
 
-The data therefore do not support the claim that local sequence can reliably predict mutation-induced backbone bending.
+**The 248 pairs are not 248 independent observations.** They cover 69 residues. Residue 99
+alone contributes 61 pairs (the L99A cavity series with different ligands), and those
+pairs scatter like noise. Bootstrap intervals that resample pairs are therefore too
+narrow, and the effective number of independent movers is closer to the 38 distinct
+residues than to 72.
 
-The result was consistent across multiple validation stages, datasets, and leakage-controlled evaluations.
+**Label reliability is unknown.** The rule's false-positive rate on WT-vs-WT pairs was not
+measured. Replicates of the same variant often disagree on mover status. The WT floor
+(0.75–0.98°) comes from isomorphous WT crystals and probably underestimates noise for
+mutants crystallized under other conditions. Without a test-retest ceiling, AUC 0.52
+cannot be read as "no signal".
 
----
+**There is no positive control.** T4L mutagenesis targets stability and cavities, mostly
+core hydrophobics. Pro/Gly are involved in only 3% of movers, so the cases where local
+sequence is known to matter (X→Pro in a helix, Gly in a turn) are nearly absent.
+Nothing in this set could have shown a local effect if one existed.
 
-## The most informative result
+**The loop enrichment does not survive.** On all pairs, loops have more movers than helices
+(Fisher p = 0.041), but the test ignores repeated residues. Gate 4 replicated loop
+**AUC**, not the enrichment.
 
-The strongest evidence came from introducing a small amount of non-local structural information.
-
-When a simple description of the surrounding contact environment was added, performance improved in exactly the situations where protein physics predicts it should.
-
-The effect was most visible in protein cores, where packing interactions dominate.
-
-This suggests that the information missing from the local model is not hidden in more sophisticated sequence features.
-
-It is largely absent from local sequence altogether.
-
-Backbone bending appears to be governed primarily by tertiary interactions rather than local residue patterns.
-
----
-
-## Why this matters
-
-This project is not an alternative to AlphaFold, and it was never intended to be.
-
-Instead, it explores the negative space around modern structure prediction.
-
-Successful protein models rely on long-range information because proteins themselves rely on long-range interactions.
-
-By deliberately removing that information and measuring what remains, this project provides an empirical demonstration of why local sequence alone is insufficient.
-
-The conclusion is simple:
-
-> Mutation-induced backbone bending is real.
->
-> Local sequence does not reliably predict it.
->
-> Structural context helps because structural context contains the information that local sequence lacks.
-
-That result may be less exciting than discovering a new predictor, but it is arguably more informative.
-
-Knowing where the signal is not can be just as valuable as knowing where it is.
+**The 3D lift is untested.** Core-subset AUC moved from 0.48 to 0.58, but no paired test on
+the difference was run, and refit noise (±0.02–0.03) is of the same order. It is
+suggestive at most.
 
 ---
 
-## Technical highlights
+## What can be claimed
 
-* 136,961 training windows from 568 non-redundant protein chains
-* Family-level holdout evaluation
-* Sequence-identity culling
-* Bootstrap confidence intervals
-* Leakage-controlled validation
-* Empirical noise-floor estimation
-* Statistical enrichment analysis
-* Explicit replication stages
-* Structural-context ablation testing
+> On T4 lysozyme, a gradient-boosting model trained on absolute local geometry across
+> proteins does not identify which single mutants change local Cα geometry. Its
+> predicted changes do not correlate with the observed ones and are about twice as large.
 
-The emphasis throughout was on falsification, uncertainty estimation, and honest interpretation rather than benchmark optimization.
+That is narrow, but it holds. The following do **not** follow from this data:
+
+- that local sequence contains no information about mutation-induced backbone change.
+  This is a low-power null from one weak model, with unknown label reliability and no
+  positive control;
+- that backbone bending is governed primarily by tertiary interactions;
+- that ~29% of mutations move the backbone. That figure is 72/248 crystal pairs in one
+  protein, with an uncalibrated threshold.
 
 ---
 
-## Final conclusion
+## Known gaps in this version
 
-The original hypothesis was that local amino-acid patterns drive mutation-induced backbone bending in a predictable way.
+- Analysis unit is the crystal pair, not the variant. `SPEC_bending_and_pairs.md` §2.4
+  asks for per-variant aggregation; no script implements it.
+- No label-reliability ceiling and no null calibration of the mover rule.
+- No positive control.
+- Validation proteins are held out by PDB ID, not by sequence identity.
+- The confound controls in the SPEC (ligand state, crystal contacts, resolution) are not
+  implemented in the T4L pipeline.
+- The Gate 2 training set is the first 600 hits of a live RCSB query and changes as the
+  PDB grows. IDs are not pinned.
 
-After multiple rounds of testing, the evidence does not support that hypothesis.
+---
 
-The signal exists.
+## Running it
 
-The predictor does not.
+Python 3 with `numpy`, `scipy`, `scikit-learn` and `matplotlib`. Every gate except
+Gate 0 downloads structures from RCSB.
 
-And that gap turns out to explain something important about protein structure itself.
+```bash
+pip install numpy scipy scikit-learn matplotlib
+python bending_metric.py           # Gate 0 self-test (offline)
+python feasibility_t4l.py          # Gate 1
+python gate2_model_feasibility.py  # Gate 2
+python mover_composition.py        # Gate 2b
+python loop_gate.py                # Gate 3
+python powered_loop_gate.py        # Gate 4
+python gate3_3d.py                 # Gate 5
+python summary_figure.py
+```

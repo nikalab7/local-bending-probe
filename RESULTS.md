@@ -5,6 +5,12 @@ A gate-by-gate record of the investigation. The discipline of this document:
 of movers (n), in one breath.** Where a CI includes 0.50, the honest statement is
 *"not distinguishable from chance at this sample size"* — never "weak signal."
 
+> **Corrections (October 2026).** The numbers below are the original ones. Passages
+> marked **Correction** were wrong as first written. `README.md` lists what this
+> version can and cannot claim. In short, the pairs are not independent (248 pairs,
+> 69 residues), the mover rule was never null-calibrated, and the metric reads local
+> Cα conformation rather than axis bending.
+
 ---
 
 ## Read this first: why some numbers differ between runs
@@ -35,6 +41,10 @@ whose claimed signal is smaller than its own run-to-run noise is not a usable me
 guard holds; a sign flip would have made a hairpin look straight).
 **Limit:** Cα-only, one geometric definition of "bending." Defensible and intrinsic
 (superposition-free), but it is *a* definition, not *the* definition.
+**Correction:** the test only uses straight halves joined at a known angle. On ideal
+secondary structure with a perfectly straight axis, the metric reads about 110° for an
+α-helix and about 0° for a β-strand. It measures local Cα conformation, which is mostly
+secondary structure, not bending of the backbone axis.
 
 ## Gate 1 — Does the signal exist? (`feasibility_t4l.py`)
 
@@ -54,15 +64,17 @@ mutations generically move backbones."*
 **Claim:** a local-sequence model **cannot** predict which mutations move the backbone.
 **Numbers:** HistGradientBoosting trained on **136,961 windows / 568 non-redundant
 chains** (≤30% identity, X-ray ≤2.0 Å). Absolute-bending RMSE **30.55°** (std 37.97°,
-~20% variance reduction). Differenced mover retrieval on 248 T4L pairs:
+~20% RMSE reduction, R² ≈ 0.35). Differenced mover retrieval on 248 T4L pairs:
 **AUC 0.524, AP 0.322 (base 0.290), Spearman 0.077, n=72 movers.**
-**Methodological highlight (worth pausing on):** the predicted-Δ error is **7.58°, not
-the 43.2° a naïve √2×RMSE bound predicts — a 5.7× error cancellation**, because the WT
-and mutant inputs are near-identical and their errors cancel in the difference. The
-original go/no-go criterion (√2×RMSE) was therefore *over-conservative*; it was caught
-and replaced with a direct, leakage-free retrieval measurement. The model fails **not**
-from differencing noise but from **insensitivity** — it barely responds to a
-single-residue change in a way that tracks reality (Spearman 0.08).
+**Correction (this paragraph originally called a "5.7× error cancellation" a
+methodological highlight and said the model "barely responds"):** the predicted-Δ
+error is **7.58°**, while predicting Δ = 0 for every pair gives **3.02°**. The model is
+2.5× worse than predicting no change. Its predicted Δ has an RMS of about 7°, roughly
+twice the observed changes, and does not track them (Spearman 0.08). The model is
+**over-sensitive**, not insensitive. It likely learned cross-protein residue ↔ local
+geometry propensities that do not play out inside a fixed folded context. The
+√2×RMSE bound assumes independent errors, so it never applied to two near-identical
+inputs, and comparing against it shows nothing.
 **Limit:** single family (T4L); n=72 movers.
 
 ## Gate 2b — What is locally addressable? (`mover_composition.py`)
@@ -112,8 +124,11 @@ barely clears 0.50; this is **not a certified improvement.** Absolute-bending RM
 improved only 30.5° → 27.9° (9%) — the crude composition feature captures a thin slice
 of 3D.
 
-**These are different claims.** The 3D result confirms *why* local prediction fails
-(the information is tertiary); it does **not** deliver a working predictor.
+**These are different claims.** The 3D result is *consistent with* a tertiary cause; it
+does **not** deliver a working predictor.
+**Correction:** the 0.48 → 0.58 lift was never tested (no paired bootstrap on the AUC
+difference, no shuffled-feature null), and refit noise of ±0.02–0.03 is of the same
+order. It does not confirm a tertiary cause.
 
 **Coincidence, not corroboration:** Gate 5's 0.59 and Gate 4's 0.59 are independent
 tests (3D-on-T4L vs powered-loops) that happen to land on the same value. They do not
@@ -129,8 +144,8 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°
   same-variant) — the detection threshold is empirical, not assumed.
-- **5.7× differencing error-cancellation** caught and quantified; the over-conservative
-  √2×RMSE gate was corrected to a direct retrieval measurement.
+- ~~5.7× differencing error-cancellation~~ **Withdrawn:** see the Gate 2 correction.
+  The model's predicted Δ is 2.5× worse than predicting zero.
 - **Leakage control:** sequence-culled training (≤30% identity); validation families
   fully held out (and explicitly excluded by ID in Gates 4–5).
 - **Bootstrap 90% CIs on every AUC**, because the mover counts are small.
@@ -155,6 +170,11 @@ cavity, or energy. A richer 3D model would mean entering established **structure
 > Mutation-induced backbone bending is real (Gate 1) but **not distinguishable-from-chance
 > predictable from local sequence** — cores AUC 0.52, loops 0.59 even when powered, both
 > with CIs touching 0.50. Adding crude 3D context nudges the core subset in the
-> theoretically-predicted direction (0.48 → 0.58), confirming the **cause is tertiary**,
-> but reaches no validated predictor. The signal lives in tertiary structure — the domain
-> of heavy structure-based methods, not a light interpretable local model.
+> theoretically-predicted direction (0.48 → 0.58), but that lift is untested, and the
+> model reaches no validated predictor.
+>
+> **Correction:** this is a low-power null, not evidence that the information is absent
+> from local sequence or that it lives in tertiary structure. Labels are unreplicated
+> crystal pairs (69 residues), the mover rule is not null-calibrated, there is no
+> positive control, and the model's predicted Δ is worse than predicting zero. See
+> `README.md` for the claim this version supports.
