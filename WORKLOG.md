@@ -159,6 +159,8 @@ Decisions recorded after the lockbox run (not changes to the frozen analysis):
 | P10 | Lab / refinement test (`LABTEST.md`, pre-registered `94e9bb7`) | cross-lab WT–WT null 0.068 [0.052, 0.094], not ~20%; within-lab, matched-condition mutational excess +0.259 [+0.207, +0.317]; PDB-REDO paired change +0.034 [−0.052, +0.118] (n = 59); pre-registered decisions: INCONCLUSIVE (primary), INCONCLUSIVE (PDB-REDO) | dev + first lockbox, 8,450 null pseudo-mutants | — |
 | P11 | Null bias recorded | holding out all WT crystals gives 5.3% WT–WT FP vs 2.6% with the 10 best-resolution ones; the frozen threshold is somewhat permissive | dev + first lockbox | — |
 
+| P12 | Physics-derived tests (`THEORY.md`, pre-registered `c8e3bfc`) | T1 overpacking pushes outward +0.072 A [+0.048, +0.092] — supported; T2 cavity collapse — not supported; T3 dose-response rho +0.30 [+0.23, +0.37] — supported; T4 Ramachandran strain rho +0.12 [+0.03, +0.19] — partly supported (strained group n = 28 < 30); T5 composite AUC 0.57; T6 consistent in all-alpha and alpha/beta | dev + first lockbox | — |
+
 ## Next
 - Write-up: `SUMMARY.md` (methods + bounded negative result; exploratory except the lockbox).
 - Prospective test: `TIMELOCK.md`. Re-run `python timelock.py build` and `gate` yearly. Run `eval` once per stratum, only after a passed gate. Stratum A will very likely not pass within ~2 years.

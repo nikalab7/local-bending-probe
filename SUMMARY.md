@@ -81,6 +81,14 @@ All values are paired dAUC with 95% family-bootstrap CIs. The upper bound is the
 - The room-temperature group comes from only 20 families, so this is a between-group association, not a within-protein estimate.
 - Excluding all mismatch-suspect rows *raises* dev AUC (0.662 → 0.701). These rows add label noise; they are not the source of the site signal.
 
+### 3.4 Physics-derived predictions (`THEORY.md`, pre-registered; exploratory)
+
+- **Overpacking:** small→large core substitutions push neighbouring atoms outward by +0.072 A [+0.048, +0.092] (n = 104, 55 families). The WT-vs-WT null gives +0.004.
+- **Dose-response:** the effect scales with the added volume, Spearman +0.30 [+0.23, +0.37].
+- **Cavities** do not measurably collapse: −0.001 [−0.018, +0.014].
+- **Backbone torsional strain** for the new residue (Ramachandran log-probability change) correlates weakly with dihedral change, rho +0.12 [+0.03, +0.19].
+- **These effects are real but small,** so they add almost nothing to the binary mover AUC (dAUC +0.006). An unfitted physics composite reaches AUC 0.57.
+
 ## 4. Methods lessons
 
 a. **The dev-calibrated null did not transfer.**

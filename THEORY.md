@@ -62,3 +62,30 @@ All CIs are 95% family bootstrap (2000 resamples). Groups below 30 rows are desc
 **What would count against the physical picture:**
 - **T1 or T2 in the opposite direction:** neighbours move toward an added side chain, or away from a cavity.
 - **No dose-response (T3 fails):** steric volume change would then not be what drives the local response.
+
+---
+
+## Results (appended after the run; the pre-specification above is unchanged)
+
+Run: `python theory.py` → `results/theory.json`. Radial displacement was computed for 1319 of 1361 rows and 1412 of 1500 null rows.
+
+| id | result (95% family bootstrap) | verdict |
+|---|---|---|
+| **T1** overpacking pushes outward | overpacking mean radial **+0.072 A [+0.048, +0.092]** (n = 104, 55 families); minus null **+0.068 [+0.042, +0.089]**. Sensitivity (top third buried): +0.061 [+0.037, +0.084] (n = 70) | **supported** |
+| **T2** cavities pull inward | cavity −0.001 A [−0.018, +0.014] (n = 252, 110 families); minus null −0.005 [−0.025, +0.012]. Sensitivity: −0.010 [−0.036, +0.012] | **not supported**: no measurable collapse |
+| **T3** dose-response | Spearman(Δvol, radial) **+0.302 [+0.228, +0.366]** (n = 673 buried non-G/P rows). Sensitivity: +0.304 [+0.222, +0.401]. Neutral − null +0.013 [−0.004, +0.027] (includes 0, as expected) | **supported** |
+| **T4** Ramachandran strain | Spearman(−S, max \|z_phi\|, \|z_psi\|) **+0.116 [+0.030, +0.193]** (n = 1361); with the combined \|z\|: +0.121 [+0.050, +0.185]. Mover rate for S <= −2: 0.786 vs 0.320 for S > −0.5, difference +0.466 [+0.328, +0.640], but the strained group has **n = 28 < 30**, so it is descriptive only. dAUC (site + subst + S vs site + subst) +0.006 [−0.005, +0.016] | **partly supported**: the Spearman criterion is met; the group contrast is below the reporting threshold. `theory.py` printed "supported" without applying the n < 30 rule; this table is the verdict |
+
+**Conditional analyses** (run because T1 and T3 are supported):
+- **T5, physics composite (no fitting):** AUC 0.573 [0.538, 0.604], against the frozen model's 0.645 (OOF on the same rows); vs SS-only +0.003. As a predictor of the binary mover label, the unfitted composite is weak.
+- **T6, structural classes:**
+  - all-alpha (482 rows): overpacking − null +0.098 (n = 41), T3 rho +0.39;
+  - alpha/beta (824 rows): +0.050 (n = 56), rho +0.26;
+  - all-beta (55 rows, overpacking n = 7): descriptive only.
+  - The direction and dose-response effects hold in both classes large enough to test. No claim of heterogeneity is made.
+
+**Reading.**
+1. **A physical law, confirmed across many families.** A larger side chain in the core pushes the surrounding atoms outward. The effect is about +0.07 A on average over atoms within 7 A, and it grows with the added volume (rho ≈ 0.3). It is systematic, small, and invisible to a WT-vs-WT comparison.
+2. **Asymmetry: cavities do not measurably collapse at this resolution** (T2). This is consistent with cavity-creating mutations often leaving the cavity largely open (Eriksson et al. 1992 report variable, partial relaxation). A limitation of the pre-specified measurement: direction is measured from the WT C-beta, and collapse toward the far end of a removed side chain may be under-captured.
+3. **Strain in the backbone torsion predicts dihedral change**, weakly over all rows (rho ≈ 0.12). The few strongly strained cases mostly move (22 of 28), but that group is too small for a claim.
+4. **Why this barely shows in the mover AUC.** The binary label asks "beyond crystal noise in one window"; these effects are ~0.07 A shifts, averaged over many atoms and directed. The continuous, direction-aware measure recovers physics that the thresholded label cannot.
