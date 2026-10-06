@@ -159,11 +159,11 @@ Feasibility, stated plainly:
 
 ## References
 
-- Baase WA, Liu L, Tronrud DE, Matthews BW (2010). Lessons from the lysozyme of phage T4. *Protein Sci.* 19, 631–641.
-- Eriksson AE, Baase WA, Zhang XJ, Heinz DW, Blaber M, Baldwin EP, Matthews BW (1992). Response of a protein structure to cavity-creating mutations and its relation to the hydrophobic effect. *Science* 255, 178–183.
-- Ikeguchi M, Ueno J, Sato M, Kidera A (2005). Protein structural change upon ligand binding: linear response theory. *Phys. Rev. Lett.* 94, 078102.
+- Baase WA, Liu L, Tronrud DE, Matthews BW (2010). Lessons from the lysozyme of phage T4. *Protein Sci.* (PMC2867005).
+- Eriksson AE et al. (1992). Response of a protein structure to cavity-creating mutations and its relation to the hydrophobic effect. *Science* 255.
+- Ikeguchi M et al. (2005). Protein structural change upon ligand binding: linear response theory. *Phys. Rev. Lett.* 94.
 - Liu R, Baase WA, Matthews BW (2000). The introduction of strain and its effects on the structure and stability of T4 lysozyme. *J. Mol. Biol.* 295, 127–145.
-- Ting D, Wang G, Shapovalov M, Mitra R, Jordan MI, Dunbrack RL (2010). Neighbor-dependent Ramachandran probability distributions of amino acids developed from a hierarchical Dirichlet process model. *PLoS Comput. Biol.* 6, e1000763.
+- Ting D, Wang G, Shapovalov M, Mitra R, Jordan MI, Dunbrack RL (2010). Neighbor-dependent Ramachandran probability distributions of amino acids developed from a hierarchical Dirichlet process model. *PLoS Comput. Biol.* 6(4).
 - Xu J, Baase WA, Baldwin E, Matthews BW (1998). The response of T4 lysozyme to large-to-small substitutions within the core and its relation to the hydrophobic effect. *Protein Sci.* 7, 158–177.
 
 - Cruickshank DWJ (1999). Remarks about protein structure precision. *Acta Cryst.* D55, 583–601.
