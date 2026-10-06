@@ -61,3 +61,24 @@ T4L is the positive control: cavity relaxation there is documented (Eriksson et 
 - **Step 1 shows no collapse, B validated, non-T4L collapse:** the original measurement missed the collapse. T2 holds with the right direction.
 - **Step 1 shows no collapse, B validated, no non-T4L collapse:** asymmetry, now measured with a validated method.
 - **B not validated:** inconclusive. The cavity side cannot be measured reliably here.
+
+---
+
+## Results (appended after the run; the pre-specification above is unchanged)
+
+Run: `python cavity.py` → `results/cavity.json`. T4L: 36 cavity rows at 26 sites; 532 T4L null rows (434 with measurement B defined).
+
+| step | result (95% site bootstrap) | decision |
+|---|---|---|
+| 1. T4L, measurement A (negative = collapse) | mean **+0.030 A [−0.004, +0.060]**; null +0.002; difference +0.028 [−0.005, +0.058] | **no collapse**, so Step 2 runs |
+| 2. T4L, measurement B (positive = into the cavity) | mean **−0.008 A [−0.044, +0.031]**; null +0.006; difference −0.014 [−0.050, +0.024] | **B not validated** → **stop** |
+
+- **Outcome, per the pre-registered rule:** inconclusive. The cavity response cannot be measured here with a validated method. Neither measurement detects collapse in T4L, the positive control. B was therefore **not** run on non-T4L proteins, and the asymmetry index was not computed: the rule computes it only in branches where the non-T4L cavity effect is measured.
+- **What this means for THEORY.md T2:**
+  - The "no measurable collapse" result stands as a statement about these two measurements only.
+  - It is **not** evidence that removed volume goes unfilled, because the measurements failed the positive control.
+  - The "added volume is pushed out, removed volume is not filled" asymmetry is **not established**.
+- **Possible reasons** (not tested):
+  - Relaxation into a cavity may be carried by a few atoms moving a lot. A mean over all atoms within 6 A dilutes it.
+  - 36 rows at 26 sites give a CI half-width of about 0.035 A, which may be larger than the mean effect.
+  - Any further measurement (e.g. the largest displacements per cavity) would have to be pre-registered and validated first against independently published T4L cavity displacements, not against these data.

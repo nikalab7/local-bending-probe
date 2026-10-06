@@ -1,0 +1,38 @@
+{
+ "note": "exploratory; pre-specified in CAVITY.md",
+ "step1_T4L_measurementA": {
+  "n": 36,
+  "n_null": 532,
+  "clusters": 26,
+  "mean": 0.030330556872340566,
+  "ci": [
+   -0.004453291391834971,
+   0.05994626027730185
+  ],
+  "null_mean": 0.0019621615861318623,
+  "diff": 0.028368395286208704,
+  "diff_ci": [
+   -0.00472118765155245,
+   0.05834166223144564
+  ]
+ },
+ "step1_collapse": false,
+ "step2_T4L_measurementB": {
+  "n": 36,
+  "n_null": 434,
+  "clusters": 26,
+  "mean": -0.008431420019279993,
+  "ci": [
+   -0.04357467336007042,
+   0.03085815807034066
+  ],
+  "null_mean": 0.005787852400039253,
+  "diff": -0.014219272419319246,
+  "diff_ci": [
+   -0.04979023881482505,
+   0.023525541062345803
+  ]
+ },
+ "B_validated": false,
+ "stopped": "B not validated on T4L: cavity response not measurable with a validated method"
+}

@@ -85,7 +85,7 @@ All values are paired dAUC with 95% family-bootstrap CIs. The upper bound is the
 
 - **Overpacking:** small→large core substitutions push neighbouring atoms outward by +0.072 A [+0.048, +0.092] (n = 104, 55 families). The WT-vs-WT null gives +0.004.
 - **Dose-response:** the effect scales with the added volume, Spearman +0.30 [+0.23, +0.37].
-- **Cavities** do not measurably collapse: −0.001 [−0.018, +0.014].
+- **Cavities:** no measurable collapse, −0.001 [−0.018, +0.014]. Neither this measurement nor a removed-atom-directed one detects collapse even in T4L, the positive control (`CAVITY.md`). The cavity side is therefore unmeasured, not "not filled", and no asymmetry is claimed.
 - **Backbone torsional strain** for the new residue (Ramachandran log-probability change) correlates weakly with dihedral change, rho +0.12 [+0.03, +0.19].
 - **These effects are real but small,** so they add almost nothing to the binary mover AUC (dAUC +0.006). An unfitted physics composite reaches AUC 0.57.
 

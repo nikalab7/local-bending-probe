@@ -161,6 +161,8 @@ Decisions recorded after the lockbox run (not changes to the frozen analysis):
 
 | P12 | Physics-derived tests (`THEORY.md`, pre-registered `c8e3bfc`) | T1 overpacking pushes outward +0.072 A [+0.048, +0.092] — supported; T2 cavity collapse — not supported; T3 dose-response rho +0.30 [+0.23, +0.37] — supported; T4 Ramachandran strain rho +0.12 [+0.03, +0.19] — partly supported (strained group n = 28 < 30); T5 composite AUC 0.57; T6 consistent in all-alpha and alpha/beta | dev + first lockbox | — |
 
+| P13 | Cavity follow-up (`CAVITY.md`, pre-registered `2c6687c`) | T4L positive control: measurement A +0.030 A [−0.004, +0.060] (no collapse); removed-atom measurement B −0.008 [−0.044, +0.031] (not validated) → stopped as pre-registered; B not run on non-T4L; asymmetry not claimed | T4L (36 rows, 26 sites) | claiming "removed volume is not filled" from T2 |
+
 ## Next
 - Write-up: `SUMMARY.md` (methods + bounded negative result; exploratory except the lockbox).
 - Prospective test: `TIMELOCK.md`. Re-run `python timelock.py build` and `gate` yearly. Run `eval` once per stratum, only after a passed gate. Stratum A will very likely not pass within ~2 years.
