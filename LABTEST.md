@@ -96,3 +96,54 @@ For reference: real mutant rows move at 0.35 overall and 0.22 for conservative e
   - The label then needs a cross-lab-aware floor, or same-lab pairs only.
 - **Primary rejected:** lab identity does not explain the excess, so the excess is more likely mutational (small real perturbations), or comes from something not measured here.
 - **PDB-REDO:** tells whether the lab effect, if any, comes from refinement choices (removable by uniform re-refinement) or from the crystals and data themselves.
+
+---
+
+## Results (appended after the run; the pre-specification above is unchanged)
+
+**Implementation note.** The first PDB-REDO run found no models, because the PDB-REDO server answers HEAD requests with 404 even for existing models. Availability is now checked with a GET (commit `0243a57`). The design is unchanged.
+
+**Labels.** Rebuilt with NULL_HELDOUT = 40. Real rows are identical to the frozen label: 1250 dev rows + 111 lockbox rows. There are 8,456 WT–WT pseudo-mutants (8,450 annotated with metadata). Metadata: 10,874 entries (`results/lab_metadata.json.gz`).
+
+### Primary: WT–WT null by lab relation (`results/labtest.json`)
+
+| class | mover rate [95% CI] | n (families) | matched conditions |
+|---|---|---|---|
+| cross-lab (f = 0) | **0.068 [0.052, 0.094]** | 691 (51) | 0.042 [0.011, 0.070], n = 240 |
+| same-lab (f >= 0.5) | 0.052 [0.035, 0.064] | 4111 (195) | 0.037 [0.027, 0.047], n = 2189 |
+| mixed | 0.052 [0.045, 0.063] | 3648 (50) | 0.025 [0.018, 0.036], n = 1872 |
+
+- **Within protein, cross − same:**
+  - raw: +0.105 [+0.015, +0.183] (39 strata, 92 vs 778 rows);
+  - matched conditions: +0.088 [−0.038, +0.215] (14 strata, 29 vs 321 rows).
+- **Pre-registered decision: INCONCLUSIVE.** The matched CI includes 0, and its upper bound is above +0.05.
+- **Against the design question** ("if cross-lab WT–WT pairs also show ~20% movers, the excess is experimental"): cross-lab WT–WT pairs move at 6.8%, with an upper CI bound of 9.4% (7.0% matched), far from ~20%. **Laboratory differences cannot account for the mutant excess** (35% overall, 22% for conservative exposed substitutions). A lab effect of a few percentage points on WT–WT comparisons is possible.
+
+### Secondary: mutant–WT rows
+
+- **Pooled mover rates:** cross-lab 0.460 [0.361, 0.550] (n = 137), same-lab 0.327 [0.285, 0.369] (n = 946), mixed 0.379.
+- **Within protein, cross − same:** +0.107 [−0.102, +0.381] (19 strata). Matched: +0.393 [+0.134, +0.874], but only 5 strata and 20 vs 24 rows, so it is below the reporting threshold and no claim is made.
+- **Refinement program, within protein (different − same):**
+  - real rows: +0.116 [−0.054, +0.241];
+  - **WT–WT null: +0.100 [+0.029, +0.176]** (108 different-program null rows).
+- **Deposition-year gap, null mover rate:** 0.039 (0–2 y), 0.051 (3–9 y), 0.087 (>= 10 y). Real rows: 0.316, 0.375, 0.400.
+- **Mutational excess** (real − null) within lab class:
+  - same-lab: +0.275 [+0.234, +0.325];
+  - cross-lab: +0.392 [+0.294, +0.478];
+  - same-lab, matched: **+0.259 [+0.207, +0.317]**;
+  - cross-lab, matched: +0.395 [+0.267, +0.531].
+
+### PDB-REDO re-check (`results/labtest_redo.json`)
+
+- **Subset:** 40 proteins, 517 entries, 516 with a PDB-REDO model; 59 paired mutant rows (36 families) and 337 paired null rows.
+- **Mover rate:** original 0.322 → PDB-REDO 0.356, difference +0.034 [−0.052, +0.118].
+- **Null false-positive rate:** 0.059 → 0.050, difference −0.009 [−0.025, +0.005].
+- **Excess** (real − null): 0.263 → 0.305, change +0.043 [−0.043, +0.127].
+- **Pre-registered decision: INCONCLUSIVE.** The CI lower bound (−0.052) just reaches −0.05. The point estimate goes the *opposite* way to the refinement explanation: uniform re-refinement did not reduce the mover rate. The subset is small (59 paired rows), because the sampled proteins have few labelled mutations each.
+
+### Reading
+
+1. **The mutant excess is not mainly experimental.** WT–WT pairs from different laboratories, different programs or decades apart move at 4–9%. Mutant–WT pairs move at 26–40 points more than that, within the same lab and under matched conditions. Uniform re-refinement did not remove the excess.
+2. **Experimental components exist, but they are small.** Different lab, different refinement program and a long deposition gap each add a few to ~10 percentage points on WT–WT comparisons.
+3. **New methods lesson.** With all WT crystals held out, the WT–WT false-positive rate is **5.3%** (8,450 pseudo-mutants), not the 2.6% calibrated with the 10 best-resolution held-out crystals per form. Choosing held-out crystals by resolution makes the null look cleaner than real comparisons, whose mutant crystals are not selected that way. The frozen threshold is therefore somewhat permissive. The conclusion is unchanged: about 30% vs about 5%.
+4. **Taken together:** most mutations, including conservative surface ones, produce small local backbone changes beyond WT crystal-to-crystal variation. This is an exploratory result on dev + first-lockbox data.

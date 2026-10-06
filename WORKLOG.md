@@ -156,6 +156,9 @@ Decisions recorded after the lockbox run (not changes to the frozen analysis):
 | P8 | Environment pinned: `requirements.lock`, digest-pinned `Dockerfile`, pre-registration commit `662994a` (the commit that added TIMELOCK.md), frozen dev matrix `results/frozen_dev_matrix.npz` (reproduces lockbox AUC 0.532099 exactly) | the run in years must use the same pipeline; rebuilding dev labels later could drift with PDB remediation | — | trusting "same code" without version and file checks |
 | P9 | Feasibility stated plainly | ~18.5 newly eligible families/yr (2016–2025), 50% post-QC yield -> ~9/yr; ~190 needed for AUC 0.62 (~21 yr), ~107 for 0.66 (~12 yr); 300+ within ~2 years is not realistic | `results/timelock_feasibility.json` | — |
 
+| P10 | Lab / refinement test (`LABTEST.md`, pre-registered `94e9bb7`) | cross-lab WT–WT null 0.068 [0.052, 0.094], not ~20%; within-lab, matched-condition mutational excess +0.259 [+0.207, +0.317]; PDB-REDO paired change +0.034 [−0.052, +0.118] (n = 59); pre-registered decisions: INCONCLUSIVE (primary), INCONCLUSIVE (PDB-REDO) | dev + first lockbox, 8,450 null pseudo-mutants | — |
+| P11 | Null bias recorded | holding out all WT crystals gives 5.3% WT–WT FP vs 2.6% with the 10 best-resolution ones; the frozen threshold is somewhat permissive | dev + first lockbox | — |
+
 ## Next
 - Write-up: `SUMMARY.md` (methods + bounded negative result; exploratory except the lockbox).
 - Prospective test: `TIMELOCK.md`. Re-run `python timelock.py build` and `gate` yearly. Run `eval` once per stratum, only after a passed gate. Stratum A will very likely not pass within ~2 years.
