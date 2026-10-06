@@ -19,3 +19,7 @@ results/_*.pdb
 
 # final_eval.py label/feature cache (rebuilt from the PDB caches)
 results/_cache/
+
+# PDB-REDO downloads and hybrid files (labtest.py redo)
+redo_pdb/
+redo_hybrid/
