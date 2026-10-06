@@ -24,7 +24,7 @@ A mutation counts as a **mover** when its change clearly exceeds crystal-to-crys
 **Status: all results are exploratory.** The pre-registered lockbox did not confirm the dev signal (AUC 0.532 [0.403, 0.661], n = 111, 89 families), and it was too small to detect it (minimum detectable AUC 0.685). See *Final result* below.
 
 1. **Bending is real.** 28–36% of clean single mutations move the backbone beyond noise, against 2.6% of WT-vs-WT pseudo-mutants.
-2. **"What" adds almost nothing:** +0.014 AUC, and +0.002 even with the ESM-2 language model. The original hypothesis, that local sequence determines bending, is rejected.
+2. **"What", bounded (post-hoc, dev):** for the C-alpha bend label, adding substitution features to site features gives +0.004 [−0.015, +0.025]: no detectable gain, upper bound +0.025 AUC. Label noise (kappa 0.37) attenuates effects, so this does not show absence. For the frozen combined label, which includes phi/psi, substitution features add +0.059 [+0.033, +0.089], partly outside Gly/Pro. ESM-2 and substitution x context add nothing beyond them. (Earlier versions said "+0.014, rejected", which was the v5 bend-label number.)
 3. **On dev, the information is in "where":** a straight WT window, burial and non-local contacts. That beats secondary structure by +0.09 and burial alone by +0.11, and beats a noise-only score by +0.07. About 0.03 of the pooled dev AUC is between-protein (negative control 0.53); within-protein AUC is 0.65. **Not confirmed on the lockbox.**
 4. **The ceiling is set by label noise.** Split-half reliability puts the achievable AUC at about 0.72–0.79. The learning curve is saturated, and every model variant (boosting, ensemble, ESM) lands within ±0.02.
 
@@ -99,7 +99,7 @@ Every decision that shaped the final pipeline: what was decided, why, on which d
 | # | decision | why | data | rejected alternatives |
 |---|---|---|---|---|
 | F1 | **SITE** (C-alpha site context) | beats SS by +0.07 to +0.09 (paired); signal survives the noise decomposition (+0.07 beyond a noise score) | dev (v3-v5) | SS only (at chance) |
-| F2 | **SUBST** (context-free substitution descriptors) kept | small but consistent gain (+0.014 [-0.00, +0.03]) and needed to state the "what vs where" result | dev (v4, v5) | site only |
+| F2 | **SUBST** (context-free substitution descriptors) kept | small but consistent gain (+0.014 [-0.00, +0.03]) and needed to state the "what vs where" result. *Post-hoc, frozen combined label: +0.059 [+0.033, +0.089]; bend label +0.004 [−0.015, +0.025]* (`results/posthoc_dev.json`) | dev (v4, v5; post-hoc on v6) | site only |
 | F3 | Full-atom CONTEXT and substitution x context INTERACT **not** in the final model | where - site = -0.023 [-0.04, -0.00] (logreg); the best variant (hgb/ensemble on where + what, 0.649) was chosen after the fact among ~12 variants | dev (v4, v5) | where, where + what (logreg and hgb), ensembles |
 | F4 | ESM-2 site log-probabilities and LLR **rejected** | +0.002 [-0.01, +0.01] | dev (v4, v5) | site + ESM terms |
 | F5 | ESM-2 per-residue **embeddings rejected** | PCA 8/16/32/64 components over site + subst: -0.009 to +0.001, all CIs span 0; embeddings alone 0.591 (-0.057) | dev, bend + NCS label (this round) | any PC count |
@@ -143,12 +143,21 @@ Rules followed (user's protocol message): freeze before evaluation, a clean lock
 - **Artifacts:** excluding temperature/resolution/altloc/lattice-suspect rows raises dev AUC to 0.70. These cases add noise; they are not the signal.
 
 Decisions recorded after the lockbox run (not changes to the frozen analysis):
-| # | what | why | data |
-|---|---|---|---|
-| P1 | All results labelled exploratory | the protocol's size rule (>= 30 rows, >= 10 per class, >= 10 families) was met, but the power analysis shows the lockbox cannot detect the dev effect, so user rule 2 ("too small -> exploratory") applies | lockbox power analysis |
-| P2 | The lockbox negative control is reported as degenerate | 73 of 89 lockbox families have one row, so shuffling within families leaves most labels unchanged | lockbox family sizes |
-| P3 | No re-analysis of the lockbox (no new features, thresholds or subsets) | one run only; anything further would be exploratory and would contaminate the next lockbox | — |
+| # | what | why | data | rejected alternatives |
+|---|---|---|---|---|
+| P1 | All results labelled exploratory | the protocol's size rule (>= 30 rows, >= 10 per class, >= 10 families) was met, but the power analysis shows the lockbox cannot detect the dev effect, so user rule 2 ("too small -> exploratory") applies | lockbox power analysis | — |
+| P2 | The lockbox negative control is reported as degenerate | 73 of 89 lockbox families have one row, so shuffling within families leaves most labels unchanged | lockbox family sizes | — |
+| P3 | No re-analysis of the lockbox (no new features, thresholds or subsets) | one run only; anything further would be exploratory and would contaminate the next lockbox | — | re-scoring with other features or thresholds |
+
+| P4 | "What" claim bounded and split by label | post-hoc paired tests: bend label +0.004 [−0.015, +0.025]; combined label +0.059 [+0.033, +0.089]; phi +0.041, psi +0.043, CA torsion +0.027; without Gly/Pro +0.031 [+0.010, +0.054]. The earlier README statement (+0.01) used the v5 bend-label value and was wrong for the frozen label | dev, frozen label (`posthoc_dev.py`) | the unbounded wording "local sequence doesn't determine bending" |
+| P5 | Artifact result framed as "quantified in this dataset", not new | cryo-cooling and resolution effects on apparent structural differences are documented (Fraser 2011, Halle 2004, Keedy 2015/2018, Juers & Matthews 2001, Cruickshank 1999); n and family-bootstrap CIs reported (room-temperature mutant vs cryo WT: 0.565 [0.477, 0.684] vs 0.337, n = 115, 20 families; resolution > 0.5 A worse: 0.545 [0.456, 0.646] vs 0.341, n = 101, 33 families) | dev | — |
+| P6 | Methods lessons recorded | (a) null FP 2.6% -> 4.7% on the lockbox: reliability depends on WT crystal count (median 7 vs 3); (b) 256 entities -> 111 mutations after QC: power must be computed post-QC, before unblinding; (c) within-family shuffles are degenerate with singleton families; (d) the label definition decides the "what" answer | dev + lockbox counts | — |
+| P7 | Time-based lockbox pre-registered (`TIMELOCK.md`): cutoff 2026-10-05; stratum A = new proteins (confirmatory), B = new mutations of known proteins (secondary, weaker question); blinded post-QC gate, unblind only if predicted MDA <= 0.62 | lessons (a)/(b); keeps the frozen pipeline untouched | release dates of 9,662 dev/lockbox entries | re-analysing the opened lockbox; merging lockbox into dev; a lower gate (would repeat the underpowered test) |
+| P8 | Environment pinned: `requirements.lock`, digest-pinned `Dockerfile`, pre-registration commit check, frozen dev matrix `results/frozen_dev_matrix.npz` (reproduces lockbox AUC 0.532099 exactly) | the run in years must use the same pipeline; rebuilding dev labels later could drift with PDB remediation | — | trusting "same code" without version and file checks |
+| P9 | Feasibility stated plainly | ~18.5 newly eligible families/yr (2016–2025), 50% post-QC yield -> ~9/yr; ~190 needed for AUC 0.62 (~21 yr), ~107 for 0.66 (~12 yr); 300+ within ~2 years is not realistic | `results/timelock_feasibility.json` | — |
 
 ## Next
-- A confirmatory test needs about 3–4x more independent families (300+), ideally with more WT crystals per form, e.g. PDB depositions after the freeze date. Re-run `mine_pairs.py --lockbox` against a new dev manifest that includes the current lockbox, then run `final_eval.py lockbox` once on the new set.
+- Write-up: `SUMMARY.md` (methods + bounded negative result; exploratory except the lockbox).
+- Prospective test: `TIMELOCK.md`. Re-run `python timelock.py build` and `gate` yearly. Run `eval` once per stratum, only after a passed gate. Stratum A will very likely not pass within ~2 years.
+- A faster confirmatory route needs a new data source, e.g. purpose-collected WT/mutant crystal series for many unrelated proteins.
 - `predict.py` still ships the v5 (bend-label) fit; refit with the frozen label if the tool is used.

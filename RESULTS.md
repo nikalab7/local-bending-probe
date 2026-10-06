@@ -464,6 +464,38 @@ On dev, suspect rows have higher mover rates (room-temperature mutant vs cryo WT
 4. The negative controls sit at 0.53-0.54, not 0.50. On dev, within-family shuffling keeps each family's mover rate, and the model partly ranks families: about 0.03 of the pooled dev AUC is between-protein. Within-protein AUC (0.653) is the cleaner dev estimate. On the lockbox the control is nearly degenerate (73 of 89 families have a single row, so shuffling within them changes nothing). It is therefore not evidence about the model, and the model AUC (0.532) is indistinguishable from it.
 5. Positive controls pass: the pipeline and splits can learn a real target (helix AUC 0.92-0.95).
 
+## Post-hoc, exploratory (dev only, after the lockbox run; `posthoc_dev.py`, `results/posthoc_dev.json`)
+
+**How much does mutation identity add?** Paired dAUC, 95% family bootstrap, frozen pipeline and folds.
+
+| addition | over | dAUC [95% CI] |
+|---|---|---|
+| substitution features, label = C-alpha bend (\|z_bend\| > 2) | site | +0.004 [−0.015, +0.025] |
+| substitution features, frozen combined label | site | +0.059 [+0.033, +0.089] |
+| substitution features, label = phi / psi / CA torsion b | site | +0.041 [+0.011, +0.066] / +0.043 [+0.016, +0.069] / +0.027 [+0.002, +0.053] |
+| Pro/Gly flags only (combined) | site | +0.031 [+0.016, +0.047] |
+| substitution features without Pro/Gly flags (combined) | site | +0.047 [+0.020, +0.078] |
+| substitution features, rows without G/P on either side (combined, n = 1132) | site | +0.031 [+0.010, +0.054] |
+| ESM-2 substitution LLR | site + subst | +0.001 [−0.007, +0.008] |
+| substitution x context terms | site + subst | −0.000 [−0.012, +0.011] |
+| ESM-2 site terms | site + subst | +0.001 [−0.008, +0.011] |
+| ESM-2 embeddings, 16 PCs fitted in-fold (n = 1201 with embeddings) | site + subst | −0.006 [−0.023, +0.009] |
+| elastic network | site + subst | −0.003 [−0.008, +0.001] |
+| full-atom site context | site + subst | −0.005 [−0.022, +0.010] |
+
+Reading: for C-alpha bending, mutation identity adds no detectable signal over the site (upper bound +0.025). For dihedral-based labels, the physicochemical substitution descriptors do add signal, and not only through Gly/Pro. Nothing evolutionary or mechanical adds beyond them. Label noise attenuates all of these toward zero. Scaling crudely by the oracle margin (0.54 for the bend label), the bend upper bound corresponds to about +0.05 on noise-free labels.
+
+**Crystallographic mismatch and the label** (95% family-bootstrap CIs):
+
+| group | n (families) | mover rate | rest | difference |
+|---|---|---|---|---|
+| mutant > 250 K, WT < 150 K | 115 (20) | 0.565 [0.477, 0.684] | 0.337 [0.298, 0.373] | +0.229 [+0.139, +0.347] |
+| temperature mismatch > 50 K | 240 (45) | 0.467 [0.391, 0.585] | 0.332 [0.290, 0.372] | +0.135 [+0.053, +0.253] |
+| mutant resolution worse by > 0.5 A | 101 (33) | 0.545 [0.456, 0.646] | 0.341 [0.302, 0.379] | +0.203 [+0.106, +0.311] |
+| mutant resolution worse by > 0.3 A | 268 (70) | 0.459 [0.399, 0.546] | 0.330 [0.285, 0.370] | +0.129 [+0.062, +0.221] |
+
+The direction is expected from room-temperature and multi-temperature crystallography (Fraser et al. 2011 PNAS; Halle 2004 PNAS; Keedy et al. 2015, 2018 eLife), lattice repacking on cooling (Juers & Matthews 2001 JMB) and resolution-dependent coordinate error (Cruickshank 1999 Acta D). The new part is only its size in a WT/mutant mover label. See `SUMMARY.md` for the write-up and `TIMELOCK.md` for the pre-registered prospective test.
+
 ## Methodological notes worth highlighting
 
 - **Two independent noise-floor estimates agree** (0.98° WT-crystal vs 0.75°

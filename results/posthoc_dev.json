@@ -1,0 +1,251 @@
+{
+ "note": "exploratory, dev only, after the lockbox run",
+ "attenuation": 0.5740000000000001,
+ "contrasts": [
+  {
+   "group": "what",
+   "name": "substitution (physicochemical)",
+   "base": "site",
+   "d_auc": 0.059362123580198434,
+   "lo": 0.03294040423304143,
+   "hi": 0.08875321687673043,
+   "p_two_sided": 0.0,
+   "upper_bound_true_label_rough": 0.15462232905353732
+  },
+  {
+   "group": "what",
+   "name": "ESM-2 substitution LLR",
+   "base": "site+subst",
+   "d_auc": 0.0005655525559910002,
+   "lo": -0.006638780508007363,
+   "hi": 0.008227447682994018,
+   "p_two_sided": 0.843,
+   "upper_bound_true_label_rough": 0.014333532548770064
+  },
+  {
+   "group": "what",
+   "name": "substitution x context terms",
+   "base": "site+subst",
+   "d_auc": -6.40773831911412e-05,
+   "lo": -0.01192547033366869,
+   "hi": 0.010654294171927503,
+   "p_two_sided": 0.91,
+   "upper_bound_true_label_rough": 0.018561488104403313
+  },
+  {
+   "group": "what",
+   "name": "all mutation-identity features",
+   "base": "site",
+   "d_auc": 0.05957385754204725,
+   "lo": 0.0280542769714562,
+   "hi": 0.09231477679947042,
+   "p_two_sided": 0.0,
+   "upper_bound_true_label_rough": 0.16082713728130735
+  },
+  {
+   "group": "where",
+   "name": "ESM-2 site terms (entropy, WT log-prob)",
+   "base": "site+subst",
+   "d_auc": 0.0013511969933777124,
+   "lo": -0.007969600854207925,
+   "hi": 0.010623090331219715,
+   "p_two_sided": 0.738,
+   "upper_bound_true_label_rough": 0.0185071260125779
+  },
+  {
+   "group": "where",
+   "name": "elastic network (ENM)",
+   "base": "site+subst",
+   "d_auc": -0.0030199949295288686,
+   "lo": -0.007574844611046552,
+   "hi": 0.0005313778641462925,
+   "p_two_sided": 0.095,
+   "upper_bound_true_label_rough": 0.0009257454079203701
+  },
+  {
+   "group": "where",
+   "name": "full-atom site context",
+   "base": "site+subst",
+   "d_auc": -0.005254345421671025,
+   "lo": -0.021904805000872985,
+   "hi": 0.010161889831599743,
+   "p_two_sided": 0.562,
+   "upper_bound_true_label_rough": 0.017703640821602338
+  },
+  {
+   "group": "where",
+   "name": "ESM-2 per-residue embedding (16 PCs; n=1201)",
+   "base": "site+subst",
+   "d_auc": -0.005582691540423901,
+   "lo": -0.02340869492749606,
+   "hi": 0.009395397913328626,
+   "p_two_sided": 0.468,
+   "upper_bound_true_label_rough": 0.016368289047610843
+  }
+ ],
+ "substitution_gain": [
+  {
+   "name": "all SUBST",
+   "n": 1250,
+   "movers": 447,
+   "d_auc": 0.059362123580198434,
+   "lo": 0.03294040423304143,
+   "hi": 0.08875321687673043,
+   "p_two_sided": 0.0
+  },
+  {
+   "name": "Pro/Gly flags only",
+   "n": 1250,
+   "movers": 447,
+   "d_auc": 0.031312945581585816,
+   "lo": 0.015522803518433147,
+   "hi": 0.04695534710778778,
+   "p_two_sided": 0.0
+  },
+  {
+   "name": "SUBST without Pro/Gly flags",
+   "n": 1250,
+   "movers": 447,
+   "d_auc": 0.04697847278522094,
+   "lo": 0.019657641131291915,
+   "hi": 0.07818503203756269,
+   "p_two_sided": 0.001
+  },
+  {
+   "name": "all SUBST, rows without G or P on either side",
+   "n": 1132,
+   "movers": 380,
+   "d_auc": 0.031173012318029047,
+   "lo": 0.009536482108281648,
+   "hi": 0.054424521307081954,
+   "p_two_sided": 0.001
+  },
+  {
+   "name": "all SUBST, rows with G or P",
+   "n": 118,
+   "movers": 67,
+   "d_auc": 0.01594966344746851,
+   "lo": -0.07842996709998391,
+   "hi": 0.11690974809571114,
+   "p_two_sided": 0.715
+  },
+  {
+   "name": "all SUBST, label = z_bend alone (|z| > 2)",
+   "n": 1250,
+   "movers": 349,
+   "d_auc": 0.0044872141428339285,
+   "lo": -0.01504707606543908,
+   "hi": 0.02510014627563769,
+   "p_two_sided": 0.686
+  },
+  {
+   "name": "all SUBST, label = z_phi alone (|z| > 2)",
+   "n": 1250,
+   "movers": 297,
+   "d_auc": 0.04081387502164002,
+   "lo": 0.010852573519740628,
+   "hi": 0.06602169731760683,
+   "p_two_sided": 0.009
+  },
+  {
+   "name": "all SUBST, label = z_psi alone (|z| > 2)",
+   "n": 1250,
+   "movers": 332,
+   "d_auc": 0.04328424810352527,
+   "lo": 0.0164044292721691,
+   "hi": 0.06943289298453034,
+   "p_two_sided": 0.002
+  },
+  {
+   "name": "all SUBST, label = z_ca_tor_b alone (|z| > 2)",
+   "n": 1250,
+   "movers": 344,
+   "d_auc": 0.027220018994814854,
+   "lo": 0.001613016538823041,
+   "hi": 0.053259231969370414,
+   "p_two_sided": 0.039
+  }
+ ],
+ "artifacts": {
+  "mutant room temperature (>250 K), WT cryo (<150 K)": {
+   "n": 115,
+   "families": 20,
+   "rate": 0.5652173913043478,
+   "rate_ci": [
+    0.4767373461012312,
+    0.6842105263157895
+   ],
+   "rest_n": 1135,
+   "rest_rate": 0.3365638766519824,
+   "rest_ci": [
+    0.2981560781086522,
+    0.3727216350570234
+   ],
+   "difference": 0.22865351465236539,
+   "difference_ci": [
+    0.13856379195238527,
+    0.3471969601883938
+   ]
+  },
+  "temperature mismatch > 50 K": {
+   "n": 240,
+   "families": 45,
+   "rate": 0.4666666666666667,
+   "rate_ci": [
+    0.39104328051338494,
+    0.5845097508125677
+   ],
+   "rest_n": 1010,
+   "rest_rate": 0.3316831683168317,
+   "rest_ci": [
+    0.29035861055075146,
+    0.37215517762518807
+   ],
+   "difference": 0.13498349834983497,
+   "difference_ci": [
+    0.05321761152136082,
+    0.2528996030452598
+   ]
+  },
+  "mutant resolution worse by > 0.5 A": {
+   "n": 101,
+   "families": 33,
+   "rate": 0.5445544554455446,
+   "rate_ci": [
+    0.45568591128949265,
+    0.6463593974175035
+   ],
+   "rest_n": 1149,
+   "rest_rate": 0.3411662315056571,
+   "rest_ci": [
+    0.30196414960801393,
+    0.37931603505178096
+   ],
+   "difference": 0.20338822393988748,
+   "difference_ci": [
+    0.1060134167347621,
+    0.3113430895410396
+   ]
+  },
+  "mutant resolution worse by > 0.3 A": {
+   "n": 268,
+   "families": 70,
+   "rate": 0.458955223880597,
+   "rate_ci": [
+    0.3994323481655496,
+    0.5459778929553628
+   ],
+   "rest_n": 982,
+   "rest_rate": 0.329938900203666,
+   "rest_ci": [
+    0.28534707044905283,
+    0.3700415258323778
+   ],
+   "difference": 0.129016323676931,
+   "difference_ci": [
+    0.06164747641301864,
+    0.22139278393431702
+   ]
+  }
+ }
+}

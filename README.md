@@ -12,7 +12,7 @@ To answer that, I built a lightweight, interpretable pipeline designed around a 
 
 The original expectation was that specific sequence motifs would emerge as reliable local drivers of bending. Instead, the project arrived at the opposite conclusion.
 
-On 1,250 clean WT/mutant pairs from 319 proteins, the identity of the substitution adds little or nothing to predicting which mutations move the backbone. *Where* the mutation sits carries a modest signal on the development data: straight, buried windows with non-local contacts move more. **A pre-registered lockbox of 90 unseen proteins did not confirm that signal** (AUC 0.53 [0.40, 0.66]). It was too small to detect an effect of the size seen in development, so every result here is exploratory.
+On 1,250 clean WT/mutant pairs from 319 proteins, adding mutation-identity features to site features gave **no detectable gain for C-alpha bending** (upper 95% bound +0.025 AUC on dev; label noise attenuates effects, so this is a bound, not proof of absence). For backbone **dihedral** changes the substitution does add signal (+0.03 to +0.06, exploratory). *Where* the mutation sits carries a modest signal on the development data: straight, buried windows with non-local contacts move more. **A pre-registered lockbox of 90 unseen proteins did not confirm that signal** (AUC 0.53 [0.40, 0.66]). It was too small to detect an effect of the size seen in development, so every result here is exploratory.
 
 The failure of the local model became the result.
 
@@ -42,7 +42,13 @@ The label, features, model, metrics and analysis plan were frozen in `PROTOCOL.m
 3. **The lockbox labels are noisier.** Lockbox proteins have few WT crystals (median 3 vs 7), so the WT-vs-WT null false-positive rate is 4.7% against 2.6% in dev. About 5 of the 30 lockbox "movers" are expected to be noise.
 4. **The dev number contains a between-protein component.** Shuffling labels within families still gives AUC 0.53 on dev, because the model partly learns which families have more movers. The within-protein AUC (0.653) is the cleaner dev estimate of the site-level signal.
 5. **Artifacts do not explain the dev signal.** Removing rows with temperature or resolution mismatches, mutant altlocs or lattice contacts at the mutated residue raises dev AUC (0.70). Those cases are noisier, not the source of the signal. They were never model inputs.
-6. **"What" vs "where" is unaffected.** The substitution adds about +0.01 on dev, and no added feature (ESM-2, elastic network, full-atom context) helped (`WORKLOG.md`, decision log).
+6. **"What" vs "where" depends on the label (post-hoc, dev, `results/posthoc_dev.json`).**
+   - With the C-alpha bend label, substitution features add +0.004 [−0.015, +0.025] over site features.
+   - With the frozen combined label, which includes phi/psi, they add +0.059 [+0.033, +0.089], and +0.031 [+0.010, +0.054] even without Gly/Pro.
+   - ESM-2 terms, ESM-2 embeddings, the elastic network and full-atom context add nothing detectable (upper bounds <= +0.011).
+   - An earlier version of this section wrongly quoted the old bend-label value (+0.01) for the frozen label.
+
+The write-up of all of this is `SUMMARY.md`. A prospective, pre-registered follow-up is in `TIMELOCK.md`; from the PDB alone it is not realistic within ~2 years.
 
 A confirmatory test needs a larger lockbox. The minimum detectable AUC scales as 0.5 + 2.8 x SE, with SE proportional to 1/sqrt(families). Detecting AUC 0.66 needs about 1.4x the current lockbox; detecting AUC 0.60 (plausible with noisier labels), or the +0.09 margin over SS-only, needs about 3–4x. That means 300+ independent families, ideally with more WT crystals per form, e.g. from future PDB depositions.
 
@@ -107,7 +113,7 @@ The first T4 lysozyme run found 29% (72/248). That run also reported more movers
 
 The central hypothesis did not survive.
 
-The substitution, the local-sequence part of the question, adds little once the site is known. It was tested three ways (paired ΔAUC, leave-family-out):
+The substitution, the local-sequence part of the question, adds little to **C-alpha bending** once the site is known. The numbers below are v5, bend label. With the frozen combined label, which includes phi/psi, it does add: +0.059. See *Final result*, point 6. It was tested three ways (paired ΔAUC, leave-family-out):
 
 * Context-free substitution features (Δvolume, Δhydrophobicity, charge, Pro/Gly, BLOSUM62, cavity × burial): **+0.014 [−0.00, +0.03]**
 * Substitution × local-structure terms (Gly at positive φ, Pro strain, overpacking, lost side-chain H-bonds, helix/strand propensity change): +0.018 [−0.00, +0.04] over a full-atom site description
@@ -174,7 +180,7 @@ The conclusion is simple:
 
 > Mutation-induced backbone bending is real.
 >
-> Local sequence does not predict it: once the site is known, the substitution adds about 0.01 AUC, whether it is described physically or by an evolutionary language model.
+> For C-alpha bending, adding mutation-identity features (physicochemical, ESM-2, substitution x structure) to site features gave no detectable gain: upper 95% bound +0.025 AUC on dev. Label noise (kappa 0.37) attenuates effects toward null, so this bound is weaker than it looks. For backbone dihedral changes the substitution does carry signal (+0.03 to +0.06, exploratory).
 >
 > On the development data the site's structural context carries a modest signal, mostly through tertiary environment: AUC 0.66 (within-protein 0.65), against a label-reliability ceiling of 0.79. A pre-registered lockbox of 90 unseen proteins did not confirm it (AUC 0.53 [0.40, 0.66]); it was too small to detect an effect of this size, so the site signal remains an exploratory finding. At best it ranks mutations by risk; it is not a yes/no predictor.
 
