@@ -339,25 +339,26 @@ def redo_url(p):
 
 
 def redo_available(p):
-    try:
-        req = urllib.request.Request(redo_url(p), method="HEAD")
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return r.status == 200
-    except Exception:
-        return False
+    """True if the PDB-REDO model downloads (the server answers HEAD with 404, so GET)."""
+    return fetch_redo(p) is not None
 
 
 def fetch_redo(p):
-    path = os.path.join(REDO_DIR, f"{p.upper()}_final.pdb")
+    path = os.path.join(REDO_DIR, f"{p.upper()}_final.pdb.gz")
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return path
     for k in range(3):
         try:
             with urllib.request.urlopen(redo_url(p), timeout=120) as r:
                 data = r.read()
-            with open(path, "wb") as fh:
+            if not data.lstrip().startswith((b"HEADER", b"REMARK", b"CRYST1", b"ATOM", b"MODEL", b"TITLE", b"COMPND")):
+                return None
+            with gzip.open(path, "wb") as fh:
                 fh.write(data)
             return path
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 500):          # no PDB-REDO entry
+                return None
         except Exception:
             pass
     return None
@@ -371,7 +372,7 @@ def hybrid(orig_path, redo_path, out_path):
     op = gzip.open if orig_path.endswith(".gz") else open
     with op(orig_path, "rt") as fh:
         head = [l for l in fh if not l.startswith(COORD)]
-    with open(redo_path) as fh:
+    with gzip.open(redo_path, "rt") as fh:
         coords = [l for l in fh if l.startswith(("ATOM  ", "HETATM", "ANISOU", "TER", "MODEL ", "ENDMDL"))]
     with gzip.open(out_path, "wt") as fh:
         fh.writelines(head + coords + ["END\n"])
@@ -405,7 +406,9 @@ def redo(workers=6):
         cover = np.mean(list(avail.values()))
         if cover >= REDO_MIN_COVER:
             chosen.append((acc, avail))
-    print(f"PDB-REDO subset: {len(chosen)} proteins (checked {checked} of {len(elig)} eligible)")
+    print(f"PDB-REDO subset: {len(chosen)} proteins (checked {checked} of {len(elig)} eligible)", flush=True)
+    if not chosen:
+        raise SystemExit("no protein qualifies for the PDB-REDO re-check")
     rows_o, rows_r, null_o, null_r, n_ent, n_redo = [], [], [], [], 0, 0
     for acc, avail in chosen:
         v, d = mans[acc]
