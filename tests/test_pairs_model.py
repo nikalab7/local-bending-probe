@@ -661,3 +661,13 @@ def test_final_eval_shuffle_within_family_and_power():
     assert abs(p["n_eff_families"] - 40) < 1e-9
     assert 0.5 < p["min_detectable_auc"] < 0.75
     assert not fe.reportable(y[:20]) and fe.reportable(y)
+
+
+def test_timelock_power_gate_formula():
+    """Blinded gate: predicted MDA falls with n, matches the first lockbox's SE, guards n < 2."""
+    import timelock as tl
+    mda, se = tl.predicted_mda(111, "A")
+    assert abs(se - 0.063) < 0.001                 # observed family-bootstrap SE was 0.066
+    assert tl.predicted_mda(500, "A")[0] < mda
+    assert tl.predicted_mda(0, "A")[0] == float("inf")
+    assert tl.mutation_id(dict(protein="P1", wt="L", r=99, mut="A")) == "P1:L99A"
