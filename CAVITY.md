@@ -82,3 +82,9 @@ Run: `python cavity.py` → `results/cavity.json`. T4L: 36 cavity rows at 26 sit
   - Relaxation into a cavity may be carried by a few atoms moving a lot. A mean over all atoms within 6 A dilutes it.
   - 36 rows at 26 sites give a CI half-width of about 0.035 A, which may be larger than the mean effect.
   - Any further measurement (e.g. the largest displacements per cavity) would have to be pre-registered and validated first against independently published T4L cavity displacements, not against these data.
+
+## Step 3 (filled-fraction via cavity volumes): not run — final stop
+
+- **What was proposed.** A direct filling measurement: filled fraction = 1 − V_real / V_virtual. It would be validated first against published T4L cavity volumes (Xu, Baase, Baldwin & Matthews 1998, *Protein Sci.* 7:158; Eriksson et al. 1992).
+- **Why it could not be validated.** The per-mutant volume table is reachable only as a scanned PDF (PMC2143816). From this environment that PDF sits behind bot protection (PMC proof-of-work; Europe PMC Cloudflare challenge), which was not circumvented. Openly reachable sources give only two anchors: L99A ≈ 150 A^3 (41 A^3 pre-existing in WT; Baase et al. 2010, PMC2867005) and I29A ≈ 0 (Xu et al. 1998 abstract). Two points are not enough for a pre-specified agreement criterion.
+- **Decision (user):** stop and summarize. **T2 is reported as "not measurable with these data". No further cavity measurements will be made in this project.** Nothing was computed for step 3.

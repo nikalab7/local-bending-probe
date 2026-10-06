@@ -10,6 +10,14 @@ Do single amino-acid substitutions change the local backbone (a 5-residue window
 - **Exploratory (dev, 1,250 mutations, 250 families):**
   - The model reached AUC 0.662 [0.633, 0.698] (within-protein 0.653), against a label-reliability ceiling of 0.787. It beat the SS-only baseline by +0.087 and the burial-only baseline by +0.112.
   - **"What" vs "where" depends on the label.** For C-alpha bending, adding substitution features to site features gave no detectable gain: +0.004 [−0.015, +0.025]. For backbone dihedral changes (phi/psi), substitution features added +0.03 to +0.06.
+- **Mutations shift the local backbone broadly, but slightly** (`LABTEST.md`):
+  - Mutant–WT pairs move at 30–35%, WT–WT pairs at about 5%, even across laboratories (6.8%).
+  - Within the same lab, under matched conditions, the excess is +0.26 [+0.21, +0.32].
+  - Uniform PDB-REDO re-refinement did not remove it.
+- **One physical law confirmed** (`THEORY.md`, pre-registered):
+  - Small→large core substitutions push neighbouring atoms outward, by +0.07 A [+0.05, +0.09] vs a WT–WT null.
+  - The push scales with the added volume (Spearman +0.30).
+- **The cavity side (does removed volume get filled?) is not measurable with these data** (`CAVITY.md`): no measurement detected collapse even in the T4L positive control.
 - **Artifacts, quantified in this dataset.** Pairs with a room-temperature mutant and a cryo-cooled WT were labelled "movers" in 57% of cases, against 34% for the rest. Pairs whose mutant is > 0.5 A worse in resolution: 55% vs 34%. That such mismatches create apparent structural differences is documented in prior work; these numbers measure how much they contaminate a mutant-pair label.
 
 ## 1. Data and labels
@@ -89,6 +97,27 @@ All values are paired dAUC with 95% family-bootstrap CIs. The upper bound is the
 - **Backbone torsional strain** for the new residue (Ramachandran log-probability change) correlates weakly with dihedral change, rho +0.12 [+0.03, +0.19].
 - **These effects are real but small,** so they add almost nothing to the binary mover AUC (dAUC +0.006). An unfitted physics composite reaches AUC 0.57.
 
+### 3.5 Is the mutant excess experimental? (`LABTEST.md`, pre-registered; exploratory)
+
+| comparison | mover rate or difference [95% family bootstrap] |
+|---|---|
+| WT–WT, cross-lab | 0.068 [0.052, 0.094] (n = 691) |
+| WT–WT, same lab | 0.052 [0.035, 0.064] (n = 4111) |
+| WT–WT, within protein, cross − same (matched conditions) | +0.088 [−0.038, +0.215] |
+| WT–WT, different − same refinement program | +0.100 [+0.029, +0.176] |
+| mutant − WT–WT null, same lab, matched conditions | **+0.259 [+0.207, +0.317]** |
+| PDB-REDO re-refinement, paired change in mover rate | +0.034 [−0.052, +0.118] (n = 59) |
+
+Laboratory, refinement program and deposition era each add a few percentage points to WT–WT differences. They are far from the ~25-point mutant excess.
+
+### 3.6 Cavities (`CAVITY.md`, pre-registered with a hard stop)
+
+- **T4L positive control:**
+  - C-beta-directed displacement: +0.030 A [−0.004, +0.060];
+  - displacement toward the removed atoms: −0.008 A [−0.044, +0.031].
+- **Neither measurement detects collapse.** A direct cavity-volume check could not be validated, because the published per-mutant volumes were not accessible.
+- **T2 is therefore "not measurable with these data".** No asymmetry between added and removed volume is claimed.
+
 ## 4. Methods lessons
 
 a. **The dev-calibrated null did not transfer.**
@@ -129,6 +158,13 @@ Feasibility, stated plainly:
 - A confirmatory test of the site signal on new proteins is therefore **not realistic within ~2 years** from the PDB alone.
 
 ## References
+
+- Baase WA, Liu L, Tronrud DE, Matthews BW (2010). Lessons from the lysozyme of phage T4. *Protein Sci.* 19, 631–641.
+- Eriksson AE, Baase WA, Zhang XJ, Heinz DW, Blaber M, Baldwin EP, Matthews BW (1992). Response of a protein structure to cavity-creating mutations and its relation to the hydrophobic effect. *Science* 255, 178–183.
+- Ikeguchi M, Ueno J, Sato M, Kidera A (2005). Protein structural change upon ligand binding: linear response theory. *Phys. Rev. Lett.* 94, 078102.
+- Liu R, Baase WA, Matthews BW (2000). The introduction of strain and its effects on the structure and stability of T4 lysozyme. *J. Mol. Biol.* 295, 127–145.
+- Ting D, Wang G, Shapovalov M, Mitra R, Jordan MI, Dunbrack RL (2010). Neighbor-dependent Ramachandran probability distributions of amino acids developed from a hierarchical Dirichlet process model. *PLoS Comput. Biol.* 6, e1000763.
+- Xu J, Baase WA, Baldwin E, Matthews BW (1998). The response of T4 lysozyme to large-to-small substitutions within the core and its relation to the hydrophobic effect. *Protein Sci.* 7, 158–177.
 
 - Cruickshank DWJ (1999). Remarks about protein structure precision. *Acta Cryst.* D55, 583–601.
 - Fraser JS, van den Bedem H, Samelson AJ, Lang PT, Holton JM, Echols N, Alber T (2011). Accessing protein conformational ensembles using room-temperature X-ray crystallography. *PNAS* 108, 16247–16252.

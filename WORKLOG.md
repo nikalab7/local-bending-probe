@@ -163,6 +163,8 @@ Decisions recorded after the lockbox run (not changes to the frozen analysis):
 
 | P13 | Cavity follow-up (`CAVITY.md`, pre-registered `2c6687c`) | T4L positive control: measurement A +0.030 A [−0.004, +0.060] (no collapse); removed-atom measurement B −0.008 [−0.044, +0.031] (not validated) → stopped as pre-registered; B not run on non-T4L; asymmetry not claimed | T4L (36 rows, 26 sites) | claiming "removed volume is not filled" from T2 |
 
+| P14 | T2 closed as "not measurable with these data" | the cavity-volume validation (CAVITY.md step 3) needs the per-mutant volumes of Xu et al. 1998; the scanned PDF is bot-protected from this environment and was not circumvented; user decided to stop and summarize | — | weaker two-anchor validation (L99A, I29A) |
+
 ## Next
 - Write-up: `SUMMARY.md` (methods + bounded negative result; exploratory except the lockbox).
 - Prospective test: `TIMELOCK.md`. Re-run `python timelock.py build` and `gate` yearly. Run `eval` once per stratum, only after a passed gate. Stratum A will very likely not pass within ~2 years.
