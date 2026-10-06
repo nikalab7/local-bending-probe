@@ -671,3 +671,20 @@ def test_timelock_power_gate_formula():
     assert tl.predicted_mda(500, "A")[0] < mda
     assert tl.predicted_mda(0, "A")[0] == float("inf")
     assert tl.mutation_id(dict(protein="P1", wt="L", r=99, mut="A")) == "P1:L99A"
+
+
+def test_circular_metric_wraps_across_180(monkeypatch):
+    """WT angles straddling +-180 give a small sigma; a mutant at -177 gives a small delta."""
+    vals = {"W1": 179.0, "W2": -179.0, "W3": 178.0, "W4": -178.0, "W5": 180.0}
+    monkeypatch.setattr(pairs, "METRIC", "psi")
+    monkeypatch.setattr(pairs, "bend_of", lambda st, s: vals[st["id"]])
+    monkeypatch.setattr(pairs, "bz_of", lambda st: {})
+    monkeypatch.setattr(pairs, "typical_hets", lambda structs, wts, s: None)
+    structs = {p: {"id": p} for p in vals}
+    W = pairs.form_stats(structs, sorted(vals), set(range(1, 10)), "pooled")
+    med, sig, n, _, ref = W["per"][1]
+    assert sig < 3.0 and n == 5 and ref is not None
+    delta, se, z, _, _ = pairs.label(W, 1, [pairs.rel(W, 1, -177.0)])
+    assert abs(delta) < 5.0
+    # without the circular reference the same values would look ~180 deg apart
+    assert np.std(list(vals.values())) > 100
